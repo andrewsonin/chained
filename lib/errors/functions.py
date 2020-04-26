@@ -1,0 +1,2 @@
+class InfiniteSelfReferenceError(RecursionError):
+    pass
