@@ -1,6 +1,6 @@
 from typing import Iterable, Any, Callable, Generator
 
-from lib.typing.typevar import T
+from chained.typing_tools.typevar import T
 
 
 def compose_map(iterable: Iterable, *predicates: Callable[[Any], T]) -> Generator[T, None, None]:

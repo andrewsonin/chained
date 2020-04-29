@@ -2,8 +2,7 @@ import copy
 import unittest
 from typing import Final
 
-from lib import functions
-from lib.errors.functions import InfiniteSelfReferenceError
+from chained import functions
 
 
 class TestFlat(unittest.TestCase):
@@ -58,7 +57,7 @@ class TestFlat(unittest.TestCase):
 
         array[-1].append(array)
         self.assertRaisesRegex(
-            InfiniteSelfReferenceError,
+            RecursionError,
             'Iterable contains a reference to itself',
             lambda: tuple(functions.flat_with_rec_check(array))
         )
@@ -85,10 +84,10 @@ class TestCompose(unittest.TestCase):
             tuple(
                 functions.compose_multiarg_map(
                     (
-                        lambda x, y:     (x * y, x - y, x + y),
-                        lambda x, y, z:   x + y + z,
-                        lambda x:        [x * x, x * 2],
-                        lambda array:     sum(array)
+                        lambda x, y: (x * y, x - y, x + y),
+                        lambda x, y, z: x + y + z,
+                        lambda x: [x * x, x * 2],
+                        lambda array: sum(array)
                     ),
                     (
                         (1, 2),
@@ -119,17 +118,17 @@ class TestCompose(unittest.TestCase):
             tuple(
                 functions.compose_multiarg_filter(
                     (
-                        lambda x, y:     (x * y, x - y, x + y),
-                        lambda x, y, z:   x + y + z,
-                        lambda x:        [x * x, x * 2],
-                        lambda array:     sum(array)
+                        lambda x, y: (x * y, x - y, x + y),
+                        lambda x, y, z: x + y + z,
+                        lambda x: [x * x, x * 2],
+                        lambda array: sum(array)
                     ),
                     (
-                        (1,  2),  # 24    will be passed
+                        (1, 2),  # 24    will be passed
                         (-1, 0),  # 0     won't
-                        (3,  4),  # 360   will be passed
-                        (5,  6),  # 1680  will be passed
-                        (0,  0)   # 0     won't
+                        (3, 4),  # 360   will be passed
+                        (5, 6),  # 1680  will be passed
+                        (0, 0)  # 0     won't
                     )
                 )
             ),

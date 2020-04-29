@@ -31,15 +31,15 @@ from typing import (
 
 )
 
-import lib.typing.protocol as protocol
-from lib.functions import flat, filter_map
-from lib.functions.optimized import (
+import chained.typing_tools.protocol as protocol
+from chained.functions.common import flat, filter_map
+from chained.functions.optimized import (
     compose_map,
     compose_filter,
     compose_multiarg_map,
     compose_multiarg_filter
 )
-from lib.typing.typevar import T, T_co, M_co, T_contra
+from chained.typing_tools.typevar import T, T_co, M_co, T_contra
 
 __all__: Final = (
     # Classes

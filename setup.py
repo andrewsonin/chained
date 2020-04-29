@@ -10,7 +10,7 @@ with open(project_dir / 'README.md', 'r') as readme:
 
 setup(
     name='chained',
-    version='0.0.2',
+    version='0.0.3',
     url='https://github.com/andrewsonin/chained',
     license='MIT',
     author='Andrew Sonin',
