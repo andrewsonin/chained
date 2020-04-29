@@ -1,7 +1,7 @@
 from collections import abc
 from typing import Iterable, Any, Callable, Union, Iterator, Generator, Type
 
-from chained.typing_tools.typevar import T, M
+from chained.typing.typevar import T, M
 
 
 def filter_map(function: Callable[[T], M],

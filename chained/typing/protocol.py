@@ -1,6 +1,6 @@
 from typing import Protocol, Iterable, Callable, Iterator, Tuple, Optional
 
-from chained.typing_tools.typevar import T_co, M_co, T_contra
+from chained.typing.typevar import T_co, M_co, T_contra
 
 
 class varArgCallable(Protocol[T_contra, T_co]):
