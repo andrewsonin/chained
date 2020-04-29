@@ -1,6 +1,5 @@
 from abc import abstractmethod
-from collections import abc
-from collections import deque
+from collections import abc, deque
 from itertools import islice, chain
 from sys import getrefcount
 from types import GeneratorType, TracebackType, CodeType, FrameType
