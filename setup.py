@@ -10,7 +10,7 @@ with open(project_dir / 'README.md', 'r') as readme:
 
 setup(
     name='chained',
-    version='0.0.1',
+    version='0.0.2',
     url='https://github.com/andrewsonin/chained',
     license='MIT',
     author='Andrew Sonin',
@@ -25,7 +25,7 @@ setup(
         'Operating System :: OS Independent',
         'Typing :: Typed',
         'Development Status :: 2 - Pre-Alpha',
-        'License :: OSI Approved :: GNU General Public License v2 (GPLv2)',
+        'License :: OSI Approved :: MIT License',
     ],
     long_description=long_desc,
     long_description_content_type='text/markdown',
