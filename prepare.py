@@ -57,8 +57,7 @@ pypi_upload_script_content = cleandoc(
     f"""
     #!/usr/bin/env bash
     set -e
-    
-    python prepare.py
+
     python setup.py sdist
     python setup.py bdist_wheel
     twine upload -r pypi -u {PYPI_USERNAME} -p {PYPI_PSWD} dist/*
