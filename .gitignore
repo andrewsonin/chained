@@ -3,3 +3,6 @@ __junk__*
 .mypy_cache
 .DS_Store
 __pycache__
+dist
+build
+*.egg-info
