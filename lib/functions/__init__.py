@@ -1,8 +1,28 @@
 from collections import abc
-from typing import Iterable, Any, Callable, Union, Iterator, Generator
+from typing import Iterable, Any, Callable, Union, Iterator, Generator, Type
 
-from lib.errors.functions import InfiniteSelfReferenceError
-from lib.typing.typevar import T
+from lib.typing.typevar import T, M
+
+
+def filter_map(function: Callable[[T], M],
+               iterable: Iterable[T],
+               *exceptions: Type[BaseException]) -> Generator[M, None, None]:
+    """
+    Creates an iterator that both filters and maps.
+    The 'function' will be called to each value and if the 'exception' is not raised the iterator yield the result.
+
+    Args:
+        function:     function to map
+        iterable:     iterable
+        *exceptions:  exception to catch
+    Returns:
+        resulting iterator
+    """
+    for item in iterable:
+        try:
+            yield function(item)
+        except exceptions:
+            pass
 
 
 def flat(iterable: Iterable[Union[T, Iterable]]) -> Generator[T, None, None]:
@@ -19,7 +39,7 @@ def flat(iterable: Iterable[Union[T, Iterable]]) -> Generator[T, None, None]:
                    resulting generator
     """
     for item in iterable:
-        if isinstance(item, abc.Iterable) and not isinstance(item, (str, bytes)):
+        if isinstance(item, abc.Iterable) and not isinstance(item, (str, bytes, bytearray)):
             yield from flat(item)
         else:
             yield item  # type: ignore
@@ -46,7 +66,7 @@ def has_inf_recursion(iterable: Iterable) -> bool:
 
     def unravel(seq: Iterable) -> bool:
         for item in seq:
-            if isinstance(item, abc.Iterable) and not isinstance(item, (str, bytes)):
+            if isinstance(item, abc.Iterable) and not isinstance(item, (str, bytes, bytearray)):
                 if item is iterable or unravel(item):
                     return True
         return False
@@ -74,9 +94,9 @@ def flat_with_rec_check(iterable: Iterable[Union[T, Iterable]]) -> Generator[T, 
 
     def unravel(seq: Iterable) -> Iterator:
         for item in seq:
-            if isinstance(item, abc.Iterable) and not isinstance(item, (str, bytes)):
+            if isinstance(item, abc.Iterable) and not isinstance(item, (str, bytes, bytearray)):
                 if item is iterable:
-                    raise InfiniteSelfReferenceError('Iterable contains a reference to itself')
+                    raise RecursionError('Iterable contains a reference to itself')
                 yield from unravel(item)
             else:
                 yield item
