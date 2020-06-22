@@ -252,7 +252,7 @@ class ChainIterable(Generic[T_co]):
             and then over the values from the iterables
         """
         return ChainIterator._make_with_no_checks(
-            chain(self, *iterables)
+            chain(self._core, *iterables)
         )
 
     def chunks(self,
@@ -298,7 +298,7 @@ class ChainIterable(Generic[T_co]):
             Result of this consumption wrapped in the instance of 'ChainIterable'
         """
 
-        wrapper = resolve_appropriate_container(collector) if isinstance(collector, type) else ChainIterable
+        wrapper = resolve_appropriate_container(collector) if isinstance(collector, type) else ChainIterable  # TODO
         return wrapper(collector(self._core))
 
     def enumerate(self,
@@ -314,7 +314,7 @@ class ChainIterable(Generic[T_co]):
         Returns:
             resulting iterator
         """
-        return ChainIterator._make_with_no_checks(enumerate(self, init_value))
+        return ChainIterator._make_with_no_checks(enumerate(self._core, init_value))
 
     def eq_chunks(self, chunk_size: int) -> 'ChainIterator[Tuple[T_co, ...]]':
         """
@@ -393,7 +393,7 @@ class ChainIterable(Generic[T_co]):
         Returns:
             resulting iterator
         """
-        return ChainIterator._make_with_no_checks(filter_map(function, self, exceptions))
+        return ChainIterator._make_with_no_checks(filter_map(function, self._core, exceptions))
 
     def first(self, default: Any = None) -> Optional[T_co]:
         """
@@ -440,7 +440,7 @@ class ChainIterable(Generic[T_co]):
         Returns:
             None
         """
-        deque(map(function, self), 0)
+        deque(map(function, self._core), 0)
 
     def inspect(self, callback: Callable[[T_co], Any]) -> 'ChainIterator[T_co]':
         """
@@ -462,7 +462,7 @@ class ChainIterable(Generic[T_co]):
             callback(x)
             return x
 
-        return ChainIterator._make_with_no_checks(map(inspector, self))
+        return ChainIterator._make_with_no_checks(map(inspector, self._core))
 
     def iter(self) -> 'ChainIterator[T_co]':
         """
@@ -529,116 +529,117 @@ class ChainIterable(Generic[T_co]):
     @overload
     def map(self,
             func: Callable[[T_co], T],
-            f1: Callable[[T], T1],
+            f0: Callable[[T], T1],
             /) -> 'ChainIterator[T1]':
         pass
 
     @overload
     def map(self,
             func: Callable[[T_co], T],
-            f1: Callable[[T], T1],
-            f2: Callable[[T1], T2],
+            f0: Callable[[T], T1],
+            f1: Callable[[T1], T2],
             /) -> 'ChainIterator[T2]':
         pass
 
     @overload
     def map(self,
             func: Callable[[T_co], T],
-            f1: Callable[[T], T1],
-            f2: Callable[[T1], T2],
-            f3: Callable[[T2], T3],
+            f0: Callable[[T], T1],
+            f1: Callable[[T1], T2],
+            f2: Callable[[T2], T3],
             /) -> 'ChainIterator[T3]':
         pass
 
     @overload
     def map(self,
             func: Callable[[T_co], T],
-            f1: Callable[[T], T1],
-            f2: Callable[[T1], T2],
-            f3: Callable[[T2], T3],
-            f4: Callable[[T3], T4],
+            f0: Callable[[T], T1],
+            f1: Callable[[T1], T2],
+            f2: Callable[[T2], T3],
+            f3: Callable[[T3], T4],
             /) -> 'ChainIterator[T4]':
         pass
 
     @overload
     def map(self,
             func: Callable[[T_co], T],
-            f1: Callable[[T], T1],
-            f2: Callable[[T1], T2],
-            f3: Callable[[T2], T3],
-            f4: Callable[[T3], T4],
-            f5: Callable[[T4], T5],
+            f0: Callable[[T], T1],
+            f1: Callable[[T1], T2],
+            f2: Callable[[T2], T3],
+            f3: Callable[[T3], T4],
+            f4: Callable[[T4], T5],
             /) -> 'ChainIterator[T5]':
         pass
 
     @overload
     def map(self,
             func: Callable[[T_co], T],
-            f1: Callable[[T], T1],
-            f2: Callable[[T1], T2],
-            f3: Callable[[T2], T3],
-            f4: Callable[[T3], T4],
-            f5: Callable[[T4], T5],
-            f6: Callable[[T5], T6],
+            f0: Callable[[T], T1],
+            f1: Callable[[T1], T2],
+            f2: Callable[[T2], T3],
+            f3: Callable[[T3], T4],
+            f4: Callable[[T4], T5],
+            f5: Callable[[T5], T6],
             /) -> 'ChainIterator[T6]':
         pass
 
     @overload
     def map(self,
             func: Callable[[T_co], T],
-            f1: Callable[[T], T1],
-            f2: Callable[[T1], T2],
-            f3: Callable[[T2], T3],
-            f4: Callable[[T3], T4],
-            f5: Callable[[T4], T5],
-            f6: Callable[[T5], T6],
-            f7: Callable[[T6], T7],
+            f0: Callable[[T], T1],
+            f1: Callable[[T1], T2],
+            f2: Callable[[T2], T3],
+            f3: Callable[[T3], T4],
+            f4: Callable[[T4], T5],
+            f5: Callable[[T5], T6],
+            f6: Callable[[T6], T7],
             /) -> 'ChainIterator[T7]':
         pass
 
     @overload
     def map(self,
             func: Callable[[T_co], T],
-            f1: Callable[[T], T1],
-            f2: Callable[[T1], T2],
-            f3: Callable[[T2], T3],
-            f4: Callable[[T3], T4],
-            f5: Callable[[T4], T5],
-            f6: Callable[[T5], T6],
-            f7: Callable[[T6], T7],
-            f8: Callable[[T7], T8],
+            f0: Callable[[T], T1],
+            f1: Callable[[T1], T2],
+            f2: Callable[[T2], T3],
+            f3: Callable[[T3], T4],
+            f4: Callable[[T4], T5],
+            f5: Callable[[T5], T6],
+            f6: Callable[[T6], T7],
+            f7: Callable[[T7], T8],
             /) -> 'ChainIterator[T8]':
         pass
 
     @overload
     def map(self,
             func: Callable[[T_co], T],
-            f1: Callable[[T], T1],
-            f2: Callable[[T1], T2],
-            f3: Callable[[T2], T3],
-            f4: Callable[[T3], T4],
-            f5: Callable[[T4], T5],
-            f6: Callable[[T5], T6],
-            f7: Callable[[T6], T7],
-            f8: Callable[[T7], T8],
-            f9: Callable[[T8], T9],
+            f0: Callable[[T], T1],
+            f1: Callable[[T1], T2],
+            f2: Callable[[T2], T3],
+            f3: Callable[[T3], T4],
+            f4: Callable[[T4], T5],
+            f5: Callable[[T5], T6],
+            f6: Callable[[T6], T7],
+            f7: Callable[[T7], T8],
+            f8: Callable[[T8], T9],
             /) -> 'ChainIterator[T9]':
         pass
 
     @overload
     def map(self,
             func: Callable[[T_co], T],
-            f1: Callable[[T], T1],
-            f2: Callable[[T1], T2],
-            f3: Callable[[T2], T3],
-            f4: Callable[[T3], T4],
-            f5: Callable[[T4], T5],
-            f6: Callable[[T5], T6],
-            f7: Callable[[T6], T7],
-            f8: Callable[[T7], T8],
-            f9: Callable[[T8], T9],
+            f0: Callable[[T], T1],
+            f1: Callable[[T1], T2],
+            f2: Callable[[T2], T3],
+            f3: Callable[[T3], T4],
+            f4: Callable[[T4], T5],
+            f5: Callable[[T5], T6],
+            f6: Callable[[T6], T7],
+            f7: Callable[[T7], T8],
+            f8: Callable[[T8], T9],
+            f9: Callable[[T9], Any],
             /,
-            *f: Callable[[T9], Any]) -> 'ChainIterator':
+            *f: Callable[[Any], Any]) -> 'ChainIterator':
         pass
 
     def map(self,
@@ -659,7 +660,7 @@ class ChainIterable(Generic[T_co]):
         Returns:
             resulting iterator
         """
-        iterator = map(func, iter(self._core))
+        iterator = map(func, self._core)
         for func in funcs:
             iterator = map(func, iterator)
         return ChainIterator._make_with_no_checks(iterator)
@@ -681,7 +682,7 @@ class ChainIterable(Generic[T_co]):
         Returns:
             The n-th element if the iterable contains it. 'default' - otherwise
         """
-        return next(islice(self, n, None), default)
+        return next(islice(self._core, n, None), default)
 
     def run(self) -> None:
         """
@@ -769,7 +770,7 @@ class ChainIterable(Generic[T_co]):
             islice iterator
         """
         return ChainIterator._make_with_no_checks(
-            islice(self, None, None, step)
+            islice(self._core, None, None, step)
         )
 
     def take(self, n: int) -> 'ChainIterator[T_co]':
@@ -799,7 +800,7 @@ class ChainIterable(Generic[T_co]):
         Returns:
             zip iterator
         """
-        return ChainIterator._make_with_no_checks(zip(*self))
+        return ChainIterator._make_with_no_checks(zip(*self._core))
 
     def unpack(self, receiver: varArgCallable[T_co, T]) -> T:
         """
@@ -813,7 +814,7 @@ class ChainIterable(Generic[T_co]):
         Returns:
             Result of receiver.__call__(*self)
         """
-        return receiver(*self)
+        return receiver(*self._core)
 
     def zip(self: 'ChainIterable[M_co]',
             *iterables: Iterable[M_co]) -> 'ChainIterator[Tuple[M_co, ...]]':
@@ -831,7 +832,7 @@ class ChainIterable(Generic[T_co]):
             and the n-th element comes from the (n-1)-th iterable from the 'iterables'.
         """
         return ChainIterator._make_with_no_checks(
-            zip(self, *iterables)
+            zip(self._core, *iterables)
         )
 
 
@@ -982,13 +983,13 @@ class ChainGenerator(ChainIterator[T_co], Generic[T_co, T_contra, M_co]):
 
         if not isinstance(generator, GeneratorType):
             if isinstance(generator, ChainGenerator):
-                generator = generator.core
+                generator = generator._core
             else:
                 raise TypeError(
                     f'{self.__class__.__name__} does not accept non-generator instances of {type(generator)}'
                 )
 
-        self._core: Final = generator  # type: ignore
+        self._core: Final[Generator[T_co, T_contra, M_co]] = generator  # type: ignore
 
     def __iter__(self) -> Iterator[T_co]:
         return iter(self._core)
