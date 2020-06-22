@@ -7,7 +7,7 @@ SETUP_DIRS = (
 )
 MYPY_CACHE_DIR = '.mypy_cache'
 
-VERSION = '0.0.5'
+VERSION = '0.0.6'
 SLOGAN = 'Making Python language more functional'
 PROJECT_NAME = 'chained'
 PROJECT_URL = 'https://github.com/andrewsonin/chained'

@@ -1,14 +1,11 @@
-from abc import abstractmethod
-from collections import abc, deque
-from itertools import islice, chain
-from sys import getrefcount
+from collections import deque
+from itertools import islice, chain, zip_longest
 from types import GeneratorType, TracebackType, CodeType, FrameType
 from typing import (
 
     # Type qualifiers
     Any,
     Final,
-    Literal,
     Optional,
     Union,
 
@@ -18,434 +15,664 @@ from typing import (
     Iterable,
     Iterator,
     Generator,
-    Sequence,
+    Reversible,
 
-    # Generic types
-    Dict,
-    Tuple,
+    # Abstract generic types
     Generic,
 
+    # Concrete generic types
+    Dict,
+    Tuple,
+
     # Decorators and functions
-    overload
+    overload,
 
 )
 
-import chained.typing.protocol as protocol
-from chained.functions import flat, filter_map
-from chained.functions.optimized import (
-    compose_map,
-    compose_filter,
-    compose_multiarg_map,
-    compose_multiarg_filter
-)
-from chained.typing.typevar import T, T_co, M_co, T_contra
+from chained.functions import flat, filter_map, compose_map, compose_filter
+from chained.type_utils.protocol import varArgCallable
+from chained.type_utils.typevar import *
 
 __all__: Final = (
     # Classes
+    'ChainIterable',
     'ChainIterator',
     'ChainGenerator',
     'ChainRange',
-    'ChainList',
-    'ChainTuple',
-    'ChainZip',
-    'ChainFilter',
-    'ChainMap',
-    'ISlice',
-    'Chain',
+
     # Functions and decorators
-    'make_chain_class',
     'make_chain'
 )
 
 
-class AbstractChainIterable(protocol.singleArgInitializable[T_co], Generic[T_co]):
-    @abstractmethod
-    def __iter__(self) -> 'Iterator[T_co]':
-        pass
+def resolve_appropriate_container(cls):
+    # TODO
+    return ChainIterable
 
-    def iter(self) -> 'ChainIterator[T_co]':
-        return ChainIterator(self.__iter__())
+
+class ChainIterable(Generic[T_co]):
+    """
+    Wrapper object that provides convenient chain-like methods for any iterable.
+
+    >>> ChainIterable(range(10)).map(lambda x: x ** 2).collect(tuple)
+    ChainIterable of (0, 1, 4, 9, 16, 25, 36, 49, 64, 81)
+
+    >>> ChainIterable(i ** 2 for i in range(3, 13))[:2].foreach(print)
+    9
+    16
+
+    >>> ChainIterable([True, True, True, False, True]).all()
+    False
+    """
+
+    # The order of the method definitions here
+    # and in all descendants of the class must obey the following sequence.
+    #
+    # 1) __init__
+    # 2) Other magic attributes
+    # 3) Static methods
+    # 4) Class methods
+    # 5) Properties
+    # 6) Ordinary methods
+    #
+    # Each group should be sorted lexicographically.
+
+    __slots__ = ('_core',)
 
     @overload
-    def map(self,
-            predicate: Callable[[T_co], T],
-            *,
-            to_chain_class: Literal[True] = True) -> 'ChainMap[T_co, T]':
+    def __init__(self, iterable: Iterable[T_co], /) -> None:
         pass
 
     @overload
-    def map(self,
-            predicate: Callable[[T_co], T],
-            *,
-            to_chain_class: Literal[False] = False) -> Iterator[T]:
+    def __init__(self, iterable: T_co, /, *iterables: T_co) -> None:
         pass
 
-    def map(self,
-            predicate: Callable[[T_co], T],
-            *,
-            to_chain_class: bool = True) -> Union[Iterator[T], 'ChainMap[T_co, T]']:
+    def __init__(self, arg1: Union[Iterable[T_co], T_co], /, *args: T_co) -> None:
         """
-        Behaves similarly to the built-in function 'map'.
+        Wrapper object that provides convenient chain-like methods for any iterable.
+
+        Possible __init__ signatures:
+
+        (Iterable[T] | *T) -> None
+
+        >>> ChainIterable(3, 4, 5)    # OK
+        ChainIterable of (3, 4, 5)
+
+        >>> ChainIterable((3, 4, 5))  # OK
+        ChainIterable of (3, 4, 5)
 
         Args:
-            predicate:       function to map
-            to_chain_class:  type of return value.
-                            `Chained` map if True, built-in 'map' if False
+            arg1:   iterable if 'args' are not specified. Otherwise - the first value to iterate over
+            *args:  any values to iterate over
+        """
+        if not args:
+            if not hasattr(arg1, '__iter__'):
+                raise TypeError(
+                    'Cannot initialize an instance of `ChainIterable` '
+                    f'from the instance of a non-iterable class {type(arg1)}'
+                )
+            self._core: Final[Iterable[T_co]] = arg1  # type: ignore
+        else:
+            self._core: Final[Iterable[T_co]] = (arg1, *args)  # type: ignore
+
+    @overload
+    def __getitem__(self, item: int) -> Optional[int]:
+        pass
+
+    @overload
+    def __getitem__(self, item: slice) -> 'ChainIterator[T_co]':
+        pass
+
+    def __getitem__(self, item: Union[int, slice]) -> Optional[Union[int, 'ChainIterator[T_co]']]:
+        """
+        Allows to access elements of 'self' by square brace indexing.
+        Common use-case of throwing ``IndexError`` as a negative result of bound checking
+        in case of single value selection is replaced by returning ``None``.
+
+        >>> ChainIterable(range(0, 20, 2))[3:].collect(tuple)
+        ChainIterable of (6, 8, 10, 12, 14, 16, 18)
+
+        >>> ChainIterable(range(0, 20, 2))[3::2].collect(tuple)
+        ChainIterable of (6, 10, 14, 18)
+
+        Args:
+            item: `int` or `slice`
+
+        Returns:
+            if 'item' is `slice`, `ChainIterator` over the values selected. Otherwise, single value at the position
+        """
+        if isinstance(item, int):
+            return next(islice(self._core, item, None), None)  # type: ignore
+        return ChainIterator._make_with_no_checks(
+            islice(self._core, item.start, item.stop, item.step)
+        )
+
+    def __iter__(self) -> Iterator[T_co]:
+        """
+        >>> type(ChainIterable(range(10)).__iter__())
+        <class 'range_iterator'>
+
+        Returns:
+            Iterator of the wrapped iterable
+        """
+        return iter(self._core)
+
+    def __repr__(self) -> str:
+        """
+        >>> ChainIterable((2, 4, 5)).__repr__()
+        'ChainIterable of (2, 4, 5)'
+
+        Returns:
+            self-representation as string
+        """
+        return f'ChainIterable of {self._core}'
+
+    @staticmethod
+    def _make_with_no_checks(iterable: Iterable[T_co]) -> 'ChainIterable[T_co]':
+        """
+        Makes class instance with no safety checks.
+
+        >>> ChainIterable._make_with_no_checks((2, 3, 11))
+        ChainIterable of (2, 3, 11)
+
+        >>> ChainIterable._make_with_no_checks(None)
+        ChainIterable of None
+
+        Args:
+            iterable:  iterable to wrap around
+
+        Returns:
+            `ChainIterable` wrapper of the iterable
+        """
+        instance = ChainIterable.__new__(ChainIterable)
+        instance._core = iterable  # type: ignore
+        return instance
+
+    @property
+    def core(self) -> Iterable[T_co]:
+        """
+        Internal iterable access handler.
+
+        >>> ChainIterable((1, 2, 3)).core
+        (1, 2, 3)
+
+        Returns:
+            Raw iterable inside the 'self' instance
+        """
+        return self._core
+
+    def all(self) -> bool:
+        """
+        Chained analogue of the built-in ``all`` function.
+
+        >>> ChainIterable([True, True, False]).all()
+        False
+
+        >>> ChainIterable([1, 2, 3.4, 0, 1]).all()
+        False
+
+        >>> ChainIterable([1, 2, 3.4, 1]).all()
+        True
+
+        Returns:
+            Whether all values of 'self' converts to True
+        """
+        return all(self._core)
+
+    def any(self) -> bool:
+        """
+        Chained analogue of the built-in 'any' function.
+
+        >>> ChainIterable([True, True, False]).any()
+        True
+
+        >>> ChainIterable([1, 2, 3.4, 0, 1]).any()
+        True
+
+        >>> ChainIterable([0, 0.0, False, ()]).any()
+        False
+
+        Returns:
+            Whether at least one value of 'self' converts to True
+        """
+        return any(self._core)
+
+    def chain(self: 'ChainIterable[M_co]', *iterables: Iterable[M_co]) -> 'ChainIterator[M_co]':
+        """
+        Takes an arbitrary number of 'iterables' and creates a new iterator over the 'self'
+        and over each input iterable.
+
+        >>> ChainIterable((3, 4, 5)).chain((6, 7, 8), [10, 13, 14]).collect(tuple)
+        ChainIterable of (3, 4, 5, 6, 7, 8, 10, 13, 14)
+
+        Args:
+            *iterables:      iterables to "extend"
+        Returns:
+            A new iterator which will first iterate over the values from the 'self'
+            and then over the values from the iterables
+        """
+        return ChainIterator._make_with_no_checks(
+            chain(self, *iterables)
+        )
+
+    def chunks(self,
+               chunk_size: int,
+               collector: Callable[[Iterable[T_co]], Iterable[T_co]] = tuple) -> 'ChainIterator[Iterable[T_co]]':
+        """
+        Splits the 'self' into ``tuples`` of length `chunk_size`. Fills with 'pad_value' if necessary.
+
+        >>> ChainIterable(range(10)).chunks(3).collect(tuple)
+        ChainIterable of ((0, 1, 2), (3, 4, 5), (6, 7, 8), (9,))
+
+        >>> ChainIterable(range(10)).chunks(3, list).collect(tuple)
+        ChainIterable of ([0, 1, 2], [3, 4, 5], [6, 7, 8], [9])
+
+        Args:
+            chunk_size:  size of eq_chunks
+            collector:   chunk holder, can be any callable with signature (Iterable) -> Iterable
+        Returns:
+            zip iterator
+        """
+
+        def chunk_generator():
+            iterator = iter(self._core)
+            while chunk := collector(islice(iterator, chunk_size)):
+                yield chunk
+
+        return ChainIterator._make_with_no_checks(chunk_generator())
+
+    def collect(self, collector: Callable[[Iterable[T_co]], Iterable[M]]) -> 'ChainIterable[M]':
+        """
+        Passes 'self' to 'collector'.
+
+        >>> ChainIterable(range(5)).collect(list)
+        ChainIterable of [0, 1, 2, 3, 4]
+
+        >>> ChainIterable(range(0, 10, 2)).collect(tuple)
+        ChainIterable of (0, 2, 4, 6, 8)
+
+        Args:
+            collector:  any callable with signature (Iterable) -> Iterable
+
+        Returns:
+            Result of this consumption wrapped in the instance of 'ChainIterable'
+        """
+
+        wrapper = resolve_appropriate_container(collector) if isinstance(collector, type) else ChainIterable
+        return wrapper(collector(self._core))
+
+    def enumerate(self,
+                  init_value: int = 0) -> 'ChainIterator[Tuple[int, T_co]]':
+        """
+        Creates an iterator which gives the current iteration count as well as the next value.
+
+        >>> ChainIterable(range(3, 6)).enumerate(1).collect(tuple)
+        ChainIterable of ((1, 3), (2, 4), (3, 5))
+
+        Args:
+            init_value:      initial value to count from
         Returns:
             resulting iterator
         """
-        if to_chain_class:
-            return ChainMap(predicate, self)
-        return map(predicate, self)
+        return ChainIterator._make_with_no_checks(enumerate(self, init_value))
 
-    @overload
-    def filter(self,
-               predicate: Callable[[T_co], bool],
-               *,
-               to_chain_class: Literal[True] = True) -> 'ChainFilter[T_co]':
-        pass
-
-    @overload
-    def filter(self,
-               predicate: Callable[[T_co], bool],
-               *,
-               to_chain_class: Literal[False] = False) -> Iterator[T_co]:
-        pass
-
-    def filter(self,
-               predicate: Callable[[T_co], bool],
-               *,
-               to_chain_class: bool = True) -> Union[Iterator[T_co], 'ChainFilter[T_co]']:
+    def eq_chunks(self, chunk_size: int) -> 'ChainIterator[Tuple[T_co, ...]]':
         """
-        Behaves similarly to the built-in function 'filter'.
+        Splits the 'self' into tuples of length `chunk_size`.
+
+        >>> ChainIterable(range(10)).eq_chunks(3).collect(tuple)
+        ChainIterable of ((0, 1, 2), (3, 4, 5), (6, 7, 8))
 
         Args:
-            predicate:       function to be filtered by
-            to_chain_class:  type of return value.
-                            `Chained` filter if True, built-in 'filter' if False
+            chunk_size:  size of chunk
+        Returns:
+            zip iterator
+        """
+        return ChainIterator._make_with_no_checks(
+            zip(*((iter(self._core),) * chunk_size))
+        )
+
+    def eq_chunks_with_pad(self, chunk_size: int, pad_value: Any = None) -> 'ChainIterator[Tuple[T_co, ...]]':
+        """
+        Splits the 'self' into ``tuples`` of length `chunk_size`. Fills with 'pad_value' if necessary.
+
+        >>> ChainIterable(range(10)).eq_chunks_with_pad(3, 'pad').collect(tuple)
+        ChainIterable of ((0, 1, 2), (3, 4, 5), (6, 7, 8), (9, 'pad', 'pad'))
+
+        Args:
+            chunk_size:  size of eq_chunks
+            pad_value:   padding value
+        Returns:
+            zip iterator
+        """
+        return ChainIterator._make_with_no_checks(
+            zip_longest(
+                *((iter(self._core),) * chunk_size),
+                fillvalue=pad_value
+            )
+        )
+
+    def filter(self, *predicates: Callable[[T_co], bool]) -> 'ChainIterator[T_co]':
+        """
+        Filters values of 'self', applying 'predicates' from left to right in a lazy manner.
+
+        >>> ChainIterable(range(10)).filter(lambda x: x > 3, lambda x: x < 8).collect(tuple)
+        ChainIterable of (4, 5, 6, 7)
+
+        Args:
+            *predicates:  predicates to apply
+
         Returns:
             resulting iterator
         """
-        if to_chain_class:
-            return ChainFilter(predicate, self)
-        return filter(predicate, self)
-
-    @overload
-    def filter_map(self,
-                   function: Callable[[T_co], M_co],
-                   *exceptions: Type[BaseException],
-                   to_chain_class: Literal[True] = True) -> 'ChainIterator[M_co]':
-        pass
-
-    @overload
-    def filter_map(self,
-                   function: Callable[[T_co], M_co],
-                   *exceptions: Type[BaseException],
-                   to_chain_class: Literal[False] = False) -> Iterator[M_co]:
-        pass
+        iterator = iter(self._core)
+        for pred in predicates:
+            iterator = filter(pred, iterator)
+        return ChainIterator._make_with_no_checks(iterator)
 
     def filter_map(self,
                    function: Callable[[T_co], M_co],
-                   *exceptions: Type[BaseException],
-                   to_chain_class: bool = True) -> Union[Iterator[M_co], 'ChainIterator[M_co]']:
+                   exceptions: Union[Type[BaseException], Tuple[Type[BaseException], ...]]) -> 'ChainIterator[M_co]':
         """
         Creates an iterator that both filters and maps.
-        The 'function' will be called to each value and if the 'exception' is not raised the iterator yield the result.
+        The 'function' will be called to each value of 'self' and, if the 'exception' is not raised,
+        the iterator will yield the result.
+
+        >>> ChainIterable((1, 3, 4, 0, 0, 2)).filter_map(lambda x: round(1 / x, 3), ZeroDivisionError).collect(tuple)
+        ChainIterable of (1.0, 0.333, 0.25, 0.5)
+
+        >>> ChainIterable(('1', '0', '0', '2', 'ef'))                                         \
+                .filter_map(lambda x: round(1 / int(x), 3), (ValueError, ZeroDivisionError))  \
+                .collect(tuple)
+        ChainIterable of (1.0, 0.5)
 
         Args:
             function:        function to map
             *exceptions:     exception to catch
-            to_chain_class:  type of return value.
-                            `Chained` generator if True, built-in 'generator' if False
+
         Returns:
             resulting iterator
         """
-        mapper = filter_map(function, self, *exceptions)
-        if to_chain_class:
-            return ChainIterator(mapper)
-        return mapper
+        return ChainIterator._make_with_no_checks(filter_map(function, self, exceptions))
 
-    @overload
-    def cmap(self,
-             *predicates: Callable[[Any], T],
-             to_chain_class: Literal[True] = True) -> 'ChainIterator[T]':
-        pass
-
-    @overload
-    def cmap(self,
-             *predicates: Callable[[Any], T],
-             to_chain_class: Literal[False] = False) -> Iterator[T]:
-        pass
-
-    def cmap(self,
-             *predicates: Callable[[Any], T],
-             to_chain_class: bool = True) -> Union[Iterator[T], 'ChainIterator[T]']:
+    def first(self, default: Any = None) -> Optional[T_co]:
         """
-        A composite analogue of the built-in function 'map' that allows the user to specify multiple mapping functions.
-        They are executed sequentially from left to right.
+        >>> ChainIterable(3, 4, 5).first()
+        3
+
+        >>> ChainIterable(()).first('default')
+        'default'
 
         Args:
-            *predicates:     functions to map
-            to_chain_class:  type of return value.
-                            `Chained` generator if True, built-in 'generator' if False
+            default:  return value in case of 'self' is empty
+        Returns:
+            first value of 'self'
+        """
+        return next(iter(self._core), default)
+
+    def flat(self) -> 'ChainIterator[T_co]':
+        """
+        Creates an iterator that flattens a nested structure. Removes all levels of indirection.
+        Does not flatten ``str``, ``bytes`` and ``bytearray``.
+
+        >>> ChainIterable([3, 4, 5, (6, 7, 8, [9, 10, [11], 12], 13)]).flat().collect(tuple)
+        ChainIterable of (3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)
+
+        >>> ChainIterable([3, 4, 5, (6, 7, 8, [9, '10', [11], '12'], 13)]).flat().collect(tuple)
+        ChainIterable of (3, 4, 5, 6, 7, 8, 9, '10', 11, '12', 13)
+
         Returns:
             resulting iterator
         """
-        mapper = compose_map(self, *predicates)
-        if to_chain_class:
-            return ChainIterator(mapper)
-        return mapper
+        return ChainIterator._make_with_no_checks(flat(self._core))
 
-    @overload
-    def cfilter(self,
-                *predicates: Callable[[Any], Any],
-                to_chain_class: Literal[True] = True) -> 'ChainIterator[T_co]':
-        pass
-
-    @overload
-    def cfilter(self,
-                *predicates: Callable[[Any], Any],
-                to_chain_class: Literal[False] = False) -> Iterator[T_co]:
-        pass
-
-    def cfilter(self,
-                *predicates: Callable[[Any], Any],
-                to_chain_class: bool = True) -> Union[Iterator[T_co], 'ChainIterator[T_co]']:
+    def foreach(self, function: Callable[[T_co], Any]) -> None:
         """
-        A composite analogue of the built-in function 'filter'
-        that allows the user to specify multiple filter functions.
-        They are executed lazily and sequentially from left to right.
+        Calls a 'function' for each argument, evaluating the 'self'.
+
+        >>> ChainIterable((1, 2, 3)).foreach(lambda x: print(x - 1))
+        0
+        1
+        2
 
         Args:
-            *predicates:     filters to map
-            to_chain_class:  type of return value.
-                            `Chained` generator if True, built-in 'generator' if False
-        Returns:
-            resulting iterator
-        """
-        mapper = compose_filter(self, *predicates)
-        if to_chain_class:
-            return ChainIterator(mapper)
-        return mapper
-
-    @overload
-    def multiarg_cmap(self,
-                      *predicates: Callable[..., T],
-                      to_chain_class: Literal[True] = True) -> 'ChainIterator[T]':
-        pass
-
-    @overload
-    def multiarg_cmap(self,
-                      *predicates: Callable[..., T],
-                      to_chain_class: Literal[False] = False) -> Iterator[T]:
-        pass
-
-    def multiarg_cmap(self,
-                      *predicates: Callable[..., T],
-                      to_chain_class: bool = True) -> Union[Iterator[T], 'ChainIterator[T]']:
-        """
-        'compose_map' analogue that accepts multi-argument functions.
-
-        These functions should return either a single value or a tuple of values.
-        In the latter case, the returned tuple will be unpacked into the next function,
-        but not passed as a single argument.
-
-        Args:
-            *predicates:     functions to map
-            to_chain_class:  type of return value.
-                            `Chained` generator if True, built-in 'generator' if False
-        Returns:
-            resulting generator
-        """
-        mapper = compose_multiarg_map(self, *predicates)
-        if to_chain_class:
-            return ChainIterator(mapper)
-        return mapper
-
-    @overload
-    def multiarg_cfilter(self,
-                         *predicates: Callable,
-                         to_chain_class: Literal[True] = True) -> 'ChainIterator[T_co]':
-        pass
-
-    @overload
-    def multiarg_cfilter(self,
-                         *predicates: Callable,
-                         to_chain_class: Literal[False] = False) -> Iterator[T_co]:
-        pass
-
-    def multiarg_cfilter(self,
-                         *predicates: Callable,
-                         to_chain_class: bool = True) -> Union[Iterator[T_co], 'ChainIterator[T_co]']:
-        """
-        'compose_filter' analogue that accepts multi-argument functions.
-
-        These functions should return either a single value or a tuple of values.
-        In the latter case, the returned tuple won't be passed as a single argument to the next function,
-        but will be unpacked into it.
-
-        Passes only those values that are transformed to True (maybe implicitly)
-        by the 'compose_multiarg_map' with the same arguments.
-
-        Args:
-            predicates*:     functions to map
-            to_chain_class:  type of return value.
-                             `Chained` generator if True, built-in 'generator' if False
-        Returns:
-            resulting iterator
-        """
-        mapper = compose_multiarg_filter(self, *predicates)
-        if to_chain_class:
-            return ChainIterator(mapper)
-        return mapper
-
-    @overload
-    def collect(self,  # type: ignore
-                collector: Type[Iterable[T_co]],
-                *,
-                to_chain_class: Literal[False] = False) -> Iterable[T_co]:
-        pass
-
-    @overload
-    def collect(self,
-                collector: Type[Iterable[T_co]],
-                *,
-                to_chain_class: Literal[True] = True) -> 'AbstractChainIterable[T_co]':
-        pass
-
-    @overload
-    def collect(self,
-                collector: 'Type[AbstractChainIterable[T_co]]',
-                *,
-                to_chain_class: bool = True) -> 'AbstractChainIterable[T_co]':
-        pass
-
-    def collect(self,
-                collector: Union[Type[Iterable[T_co]],
-                                 'Type[AbstractChainIterable[T_co]]'],
-                *,
-                to_chain_class: bool = True) -> Union[Iterable[T_co], 'AbstractChainIterable[T_co]']:
-
-        if to_chain_class:
-            collector = make_chain_class(collector)
-        return collector(self)  # type: ignore
-
-    def run(self) -> None:
-        """
-        Evaluates the entire iterable and forgets about it.
-
+            function:  function to call
         Returns:
             None
         """
-        # Feeds the entire iterator of the corresponding iterable into a zero-length deque
-        # https://docs.python.org/3/library/itertools.html#itertools-recipes
-        deque(self, 0)
+        deque(map(function, self), 0)
 
-    @overload
-    def transpose(self: 'AbstractChainIterable[Iterable[M_co]]',
-                  to_chain_class: Literal[True] = True) -> 'ChainZip[M_co]':
-        pass
-
-    @overload
-    def transpose(self: 'AbstractChainIterable[Iterable[M_co]]',
-                  to_chain_class: Literal[False] = False) -> Iterator[Tuple[M_co, ...]]:
-        pass
-
-    def transpose(self: 'AbstractChainIterable[Iterable[M_co]]',
-                  to_chain_class: bool = True) -> Union['ChainZip[M_co]', Iterator[Tuple[M_co, ...]]]:
+    def inspect(self, callback: Callable[[T_co], Any]) -> 'ChainIterator[T_co]':
         """
-        Transposes the iterable if it iterates over other iterables.
-        Be careful: The first-order iterable will be evaluated.
+        Does something with each element of the 'self', passing the values on.
+
+        >>> ChainIterable((1, 2, 3)).inspect(lambda x: print(x - 1)).collect(tuple)
+        0
+        1
+        2
+        ChainIterable of (1, 2, 3)
 
         Args:
-            to_chain_class:  type of return value.
-                            `Chained` zip iterator if True, built-in 'zip' if False.
-                             Default is True.
+            callback:  function to call
         Returns:
-            zip iterator
+            resulting iterator
         """
-        if to_chain_class:
-            return ChainZip(*self)
-        return zip(*self)
 
-    @overload
-    def take(self, n: int, to_chain_class: Literal[True] = True) -> 'ISlice[T_co]':
-        pass
+        def inspector(x):
+            callback(x)
+            return x
 
-    @overload
-    def take(self, n: int, to_chain_class: Literal[False] = False) -> Iterator[T_co]:
-        pass
+        return ChainIterator._make_with_no_checks(map(inspector, self))
 
-    def take(self, n: int, to_chain_class: bool = True) -> Union['ISlice[T_co]', Iterator[T_co]]:
+    def iter(self) -> 'ChainIterator[T_co]':
         """
-        Returns first n items of the iterable as an iterator.
+        Converts 'self' to the instance of ``ChainIterator``.
+
+        >>> ChainIterable(range(100)).iter()
+        ChainIterator wrapper of <class 'range_iterator'> object
+
+        Returns:
+            Corresponding `ChainIterator`
+        """
+        return ChainIterator._make_with_no_checks(iter(self._core))
+
+    def last(self, *, default: Any = None) -> Optional[T_co]:
+        """
+        Evaluates the 'self', returning the last element.
+
+        >>> ChainIterable(range(10_000)).last()
+        9999
 
         Args:
-            n:               number of items to return
-            to_chain_class:  type of return value.
-                            `Chained` islice iterator if True, built-in 'itertools.islice' if False
+            default:  default value to return
         Returns:
-            islice iterator
+            The last element if 'self' contains anything. 'default' - otherwise
         """
-        if to_chain_class:
-            return ISlice(self, n)
-        return islice(self, n)
+        last_elem = deque(self._core, 1)
+        if last_elem:
+            return last_elem[0]
+        return default
 
-    @overload
-    def skip(self, n: int, to_chain_class: Literal[True] = True) -> 'ISlice[T_co]':
-        pass
-
-    @overload
-    def skip(self, n: int, to_chain_class: Literal[False] = False) -> Iterator[T_co]:
-        pass
-
-    def skip(self, n: int, to_chain_class: bool = True) -> Union['ISlice[T_co]', Iterator[T_co]]:
+    def last_n(self, n: int) -> 'ChainIterable[T_co]':
         """
-        Creates an iterator that skips the first n elements.
+        Evaluates the 'self', returns last `n` elements. Stores them into ``deque``.
+
+        >>> ChainIterable(range(10_000)).last_n(5)
+        ChainIterable of deque([9995, 9996, 9997, 9998, 9999], maxlen=5)
 
         Args:
-            n:               number of items to skip
-            to_chain_class:  type of return value.
-                            `Chained` islice iterator if True, built-in 'itertools.islice' if False
+            n:    number of last elements
         Returns:
-            islice iterator
+            Last n elements container
         """
-        iterator = iter(self)
-        next(
-            (ISlice if to_chain_class else islice)(iterator, n, n),  # type: ignore
-            None
-        )
-        return iterator
+        return ChainIterable._make_with_no_checks(deque(self._core, n))
 
-    def len(self) -> int:
+    def len_eval(self) -> int:
         """
-        Evaluates the iterable, counting the number of iterations.
+        Evaluates the 'self', counting the number of iterations.
+
+        >>> ChainIterable(i for i in range(1_000) if i % 2).len_eval()
+        500
 
         Returns:
             The number of iterations
         """
         last_elem = deque(enumerate(self, 1), 1)
         if last_elem:
-            return last_elem.pop()[0]
+            return last_elem[0][0]
         return 0
 
-    def last(self, default: Any = None) -> Optional[T_co]:
+    @overload
+    def map(self, func: Callable[[T_co], T], /) -> 'ChainIterator[T]':
+        pass
+
+    @overload
+    def map(self,
+            func: Callable[[T_co], T],
+            f1: Callable[[T], T1],
+            /) -> 'ChainIterator[T1]':
+        pass
+
+    @overload
+    def map(self,
+            func: Callable[[T_co], T],
+            f1: Callable[[T], T1],
+            f2: Callable[[T1], T2],
+            /) -> 'ChainIterator[T2]':
+        pass
+
+    @overload
+    def map(self,
+            func: Callable[[T_co], T],
+            f1: Callable[[T], T1],
+            f2: Callable[[T1], T2],
+            f3: Callable[[T2], T3],
+            /) -> 'ChainIterator[T3]':
+        pass
+
+    @overload
+    def map(self,
+            func: Callable[[T_co], T],
+            f1: Callable[[T], T1],
+            f2: Callable[[T1], T2],
+            f3: Callable[[T2], T3],
+            f4: Callable[[T3], T4],
+            /) -> 'ChainIterator[T4]':
+        pass
+
+    @overload
+    def map(self,
+            func: Callable[[T_co], T],
+            f1: Callable[[T], T1],
+            f2: Callable[[T1], T2],
+            f3: Callable[[T2], T3],
+            f4: Callable[[T3], T4],
+            f5: Callable[[T4], T5],
+            /) -> 'ChainIterator[T5]':
+        pass
+
+    @overload
+    def map(self,
+            func: Callable[[T_co], T],
+            f1: Callable[[T], T1],
+            f2: Callable[[T1], T2],
+            f3: Callable[[T2], T3],
+            f4: Callable[[T3], T4],
+            f5: Callable[[T4], T5],
+            f6: Callable[[T5], T6],
+            /) -> 'ChainIterator[T6]':
+        pass
+
+    @overload
+    def map(self,
+            func: Callable[[T_co], T],
+            f1: Callable[[T], T1],
+            f2: Callable[[T1], T2],
+            f3: Callable[[T2], T3],
+            f4: Callable[[T3], T4],
+            f5: Callable[[T4], T5],
+            f6: Callable[[T5], T6],
+            f7: Callable[[T6], T7],
+            /) -> 'ChainIterator[T7]':
+        pass
+
+    @overload
+    def map(self,
+            func: Callable[[T_co], T],
+            f1: Callable[[T], T1],
+            f2: Callable[[T1], T2],
+            f3: Callable[[T2], T3],
+            f4: Callable[[T3], T4],
+            f5: Callable[[T4], T5],
+            f6: Callable[[T5], T6],
+            f7: Callable[[T6], T7],
+            f8: Callable[[T7], T8],
+            /) -> 'ChainIterator[T8]':
+        pass
+
+    @overload
+    def map(self,
+            func: Callable[[T_co], T],
+            f1: Callable[[T], T1],
+            f2: Callable[[T1], T2],
+            f3: Callable[[T2], T3],
+            f4: Callable[[T3], T4],
+            f5: Callable[[T4], T5],
+            f6: Callable[[T5], T6],
+            f7: Callable[[T6], T7],
+            f8: Callable[[T7], T8],
+            f9: Callable[[T8], T9],
+            /) -> 'ChainIterator[T9]':
+        pass
+
+    @overload
+    def map(self,
+            func: Callable[[T_co], T],
+            f1: Callable[[T], T1],
+            f2: Callable[[T1], T2],
+            f3: Callable[[T2], T3],
+            f4: Callable[[T3], T4],
+            f5: Callable[[T4], T5],
+            f6: Callable[[T5], T6],
+            f7: Callable[[T6], T7],
+            f8: Callable[[T7], T8],
+            f9: Callable[[T8], T9],
+            /,
+            *f: Callable[[T9], Any]) -> 'ChainIterator':
+        pass
+
+    def map(self,
+            func: Callable[[T_co], T],
+            /,
+            *funcs: Callable[[Any], Any]) -> 'ChainIterator':
         """
-        Evaluates the iterable, returning the last element.
+        Maps functions to the values of the iterable.
+        Functions are called sequentially in the the same order as they passed to the arguments.
+
+        >>> ChainIterable(i ** 2 for i in range(20) if i % 2).map(lambda x: x - 1, str).collect(tuple)
+        ChainIterable of ('0', '8', '24', '48', '80', '120', '168', '224', '288', '360')
 
         Args:
-            default:  default value to return
-        Returns:
-            The last element if the iterable contains anything. 'default' - otherwise
-        """
-        last_elem = deque(self, 1)
-        if last_elem:
-            return last_elem.pop()
-        return default
+            func:    first function to map
+            *funcs:  remaining functions to map
 
-    def nth(self, n: int, default: Any = None):
+        Returns:
+            resulting iterator
         """
-        Evaluates the iterable until the n-th element, returning it.
+        iterator = map(func, iter(self._core))
+        for func in funcs:
+            iterator = map(func, iterator)
+        return ChainIterator._make_with_no_checks(iterator)
+
+    def nth(self: 'ChainIterable[M_co]', n: int, default: Optional[M_co] = None) -> Optional[M_co]:
+        """
+        Evaluates the 'self' until the `n`-th element and then returns it.
+
+        >>> ChainIterable(range(2, 12)).nth(5)
+        7
+
+        >>> ChainIterable(range(2, 12)).nth(500, 'Default')
+        'Default'
 
         Args:
             n:        order number
@@ -456,308 +683,417 @@ class AbstractChainIterable(protocol.singleArgInitializable[T_co], Generic[T_co]
         """
         return next(islice(self, n, None), default)
 
-    @overload
-    def step_by(self, step: int, to_chain_class: Literal[True] = True) -> 'ISlice[T_co]':
-        pass
-
-    @overload
-    def step_by(self, step: int, to_chain_class: Literal[False] = False) -> Iterator[T_co]:
-        pass
-
-    def step_by(self, step: int, to_chain_class: bool = True) -> Union['ISlice[T_co]', Iterator[T_co]]:
+    def run(self) -> None:
         """
-        Returns every 'step'-th item of the iterable as an iterator.
+        Evaluates the entire 'self' and forgets about it.
+
+        >>> ChainIterable(range(3)).map(print).run()
+        0
+        1
+        2
+
+        Returns:
+            None
+        """
+        # Feeds the entire iterator of the corresponding iterable into a zero-length deque
+        # https://docs.python.org/3/library/itertools.html#itertools-recipes
+        deque(self._core, 0)
+
+    def skip(self, n: int) -> 'ChainIterator[T_co]':
+        """
+        Creates an iterator that skips the first `n` elements of the 'self'.
+
+        >>> ChainIterable(range(10)).skip(5).collect(tuple)
+        ChainIterable of (5, 6, 7, 8, 9)
+
+        >>> ChainIterable(range(10)).skip(50).collect(tuple)
+        ChainIterable of ()
 
         Args:
-            step:            number of iterations to skip
-            to_chain_class:  type of return value.
-                            `Chained` islice iterator if True, built-in 'itertools.islice' if False
+            n:    number of items to skip
+        Returns:
+            slice iterator
+        """
+        iterator = iter(self._core)
+        next(islice(iterator, n, n), None)
+        return ChainIterator._make_with_no_checks(iterator)
+
+    @overload
+    def slice(self,
+              stop: Optional[int],
+              /) -> 'ChainIterator[T_co]':
+        pass
+
+    @overload
+    def slice(self,
+              start: Optional[int],
+              stop: Optional[int],
+              /) -> 'ChainIterator[T_co]':
+        pass
+
+    @overload
+    def slice(self,
+              start: Optional[int],
+              stop: Optional[int],
+              step: Optional[int],
+              /) -> 'ChainIterator[T_co]':
+        pass
+
+    def slice(self,
+              *args: Optional[int]) -> 'ChainIterator[T_co]':
+        """
+        Makes slice iterator over the 'self'.
+
+        >>> ChainIterable(range(1_000))[100:200:20].collect(tuple)
+        ChainIterable of (100, 120, 140, 160, 180)
+
+        Args:
+            *args:  slicing parameters: ([start,] stop[, step])
+        Returns:
+            slice iterator
+        """
+        return ChainIterator._make_with_no_checks(
+            islice(self._core, *args)
+        )
+
+    def step_by(self, step: int) -> 'ChainIterator[T_co]':
+        """
+        Returns every `step`-th item of the 'self' as an iterator.
+
+        >>> ChainIterable(range(10_000)).step_by(2343).collect(tuple)
+        ChainIterable of (0, 2343, 4686, 7029, 9372)
+
+        Args:
+            step:  number of iterations to skip
         Returns:
             islice iterator
         """
-        if to_chain_class:
-            return ISlice(self, None, None, step)
-        return islice(self, None, None, step)
+        return ChainIterator._make_with_no_checks(
+            islice(self, None, None, step)
+        )
 
-    @overload
-    def chain(self: 'AbstractChainIterable[M_co]',
-              *iterables: Iterable[M_co],
-              to_chain_class: Literal[True] = True) -> 'Chain[M_co]':
-        pass
-
-    @overload
-    def chain(self: 'AbstractChainIterable[M_co]',
-              *iterables: Iterable[M_co],
-              to_chain_class: Literal[False] = False) -> Iterator[M_co]:
-        pass
-
-    def chain(self: 'AbstractChainIterable[M_co]',
-              *iterables: Iterable[M_co],
-              to_chain_class: bool = True) -> Union['Chain[M_co]', Iterator[M_co]]:
+    def take(self, n: int) -> 'ChainIterator[T_co]':
         """
-        Takes an arbitrary number of iterables and creates a new iterator over self and each input iterable.
+        Returns an iterator over the first `n` items of the 'self'.
+
+        >>> ChainIterable(range(1_000)).take(5).collect(tuple)
+        ChainIterable of (0, 1, 2, 3, 4)
 
         Args:
-            *iterables:      iterables to "extend"
-            to_chain_class:  type of return value.
-                            `Chained` chain iterator if True, built-in 'itertools.chain' if False
+            n:    number of items
         Returns:
-            A new iterator which will first iterate over values from the 'self'
-            and then over values from the iterables (sequentially from first to last)
+            slice iterator
         """
-        if to_chain_class:
-            return Chain(self, *iterables)
-        return chain(self, *iterables)
+        return ChainIterator._make_with_no_checks(
+            islice(self._core, n)
+        )
 
-    @overload
-    def zip(self: 'AbstractChainIterable[M_co]',
-            *iterables: Iterable[M_co],
-            to_chain_class: Literal[True] = True) -> 'Chain[Tuple[M_co, ...]]':
-        pass
-
-    @overload
-    def zip(self: 'AbstractChainIterable[M_co]',
-            *iterables: Iterable[M_co],
-            to_chain_class: Literal[False] = False) -> Iterator[Tuple[M_co, ...]]:
-        pass
-
-    def zip(self: 'AbstractChainIterable[M_co]',
-            *iterables: Iterable[M_co],
-            to_chain_class: bool = True) -> Union['ChainIterator[Tuple[M_co, ...]]', Iterator[Tuple[M_co, ...]]]:
+    def transpose(self: 'ChainIterable[Iterable[M_co]]') -> 'ChainIterator[Tuple[M_co, ...]]':
         """
-        Takes an arbitrary number of iterables and "zips up" the 'self' with them into a single iterator of tuples.
+        Transposes the 'self' if it iterates over other iterables.
+        Be careful: The first-order iterable will be evaluated.
 
-        Args:
-            *iterables:      iterables to "zip up"
-            to_chain_class:  type of return value.
-                            `Chained` zip iterator if True, built-in 'itertools.chain' if False
+        >>> ChainIterable([(1, 2), (3, 4), (5, 6)]).transpose().collect(tuple)
+        ChainIterable of ((1, 3, 5), (2, 4, 6))
+
         Returns:
-            A new iterator that will iterate over other iterables,
-            returning a tuple where the first element comes from the 'self',
-            and the n-th element comes from the (n-1)-th iterable from the 'iterables'.
+            zip iterator
         """
-        if to_chain_class:
-            return ChainZip(self, *iterables)
-        return zip(self, *iterables)
+        return ChainIterator._make_with_no_checks(zip(*self))
 
-    def unpack(self, receiver: protocol.varArgCallable[T_co, T]) -> T:
+    def unpack(self, receiver: varArgCallable[T_co, T]) -> T:
         """
-        Unpacks the iterable into specified receiver.
+        Unpacks the 'self' into the 'receiver'.
+
+        >>> ChainIterable([(3, 4, 5), (6, 7, 8), (9, 10)]).unpack(lambda *args: '__'.join(map(str, args)))
+        '(3, 4, 5)__(6, 7, 8)__(9, 10)'
 
         Args:
-            receiver:  receiver to unpack into. It can be callable or type object
+            receiver:  receiver to unpack into. It can be callable or `type` object
         Returns:
             Result of receiver.__call__(*self)
         """
         return receiver(*self)
 
-    @overload
-    def flat(self,
-             *,
-             to_chain_class: Literal[True] = True) -> 'ChainIterator[T_co]':
-        pass
-
-    @overload
-    def flat(self,
-             *,
-             to_chain_class: Literal[False] = False) -> Iterator[T_co]:
-        pass
-
-    def flat(self,
-             *,
-             to_chain_class: bool = True) -> Union[Iterator[T_co], 'ChainIterator[T_co]']:
+    def zip(self: 'ChainIterable[M_co]',
+            *iterables: Iterable[M_co]) -> 'ChainIterator[Tuple[M_co, ...]]':
         """
-        Creates an iterator that flattens nested structure. Removes all levels of indirection.
-        Does not work for flattening 'str' and 'bytes'.
+        Takes an arbitrary number of iterables and "zips up" the 'self' with them into a single iterator of tuples.
+
+        >>> ChainIterable(1, 2, 3).zip((4, 5, 6), (7, 8)).collect(tuple)
+        ChainIterable of ((1, 4, 7), (2, 5, 8))
 
         Args:
-            to_chain_class:  type of return value.
-                            `Chained` generator if True, built-in 'generator' if False
+            *iterables:      iterables to "zip up"
         Returns:
-            resulting iterator
+            A new iterator that will iterate over other iterables,
+            returning `tuples` where the first element comes from the 'self',
+            and the n-th element comes from the (n-1)-th iterable from the 'iterables'.
         """
-        flatter = flat(self)
-        if to_chain_class:
-            return ChainIterator(flatter)
-        return flatter
-
-    def foreach(self, function: Callable[[T_co], Any]) -> None:
-        """
-        Calls a function for each argument, evaluation the 'self'.
-
-        Args:
-            function:  function to call
-        Returns:
-            None
-        """
-        deque(map(function, self), 0)
-
-    @overload
-    def enumerate(self,
-                  init_value: int = 0,
-                  *,
-                  to_chain_class: Literal[True] = True) -> 'ChainIterator[Tuple[int, T_co]]':
-        pass
-
-    @overload
-    def enumerate(self,
-                  init_value: int = 0,
-                  *,
-                  to_chain_class: Literal[False] = False) -> Iterator[Tuple[int, T_co]]:
-        pass
-
-    def enumerate(self,
-                  init_value: int = 0,
-                  *,
-                  to_chain_class: bool = True) -> Union['ChainIterator[Tuple[int, T_co]]',
-                                                        Iterator[Tuple[int, T_co]]]:
-        """
-        Creates an iterator which gives the current iteration count as well as the next value.
-
-        Args:
-            init_value:      initial value to count from
-            to_chain_class:  type of return value.
-                            `Chained` generator if True, built-in 'enumerate' if False
-        Returns:
-            resulting iterator
-        """
-        enumerator = enumerate(self, init_value)
-        if to_chain_class:
-            return ChainIterator(enumerator)
-        return enumerator
-
-    def inspect(self, callback: Callable[[T_co], Any]) -> 'ChainMap[T_co, T_co]':
-        """
-        Does something with each element of an iterable, passing the value on.
-
-        Args:
-            callback:  function to call
-        Returns:
-            resulting iterator
-        """
-
-        def f(x):
-            callback(x)
-            return x
-
-        return ChainMap(f, self)
+        return ChainIterator._make_with_no_checks(
+            zip(self, *iterables)
+        )
 
 
-class AbstractChainIterator(AbstractChainIterable[T_co]):
-    @abstractmethod
-    def __next__(self) -> T_co: pass
+class ChainIterator(ChainIterable[T_co]):
+    """``ChainIterable`` iterator"""
 
-    @abstractmethod
-    def __iter__(self) -> 'Iterator[T_co]': pass
+    __slots__ = ()
 
-
-class ChainIterator(AbstractChainIterator[T_co]):
     def __init__(self, iterable: Iterable[T_co]) -> None:
-        self._iterator: Final = iter(iterable)
+        """
+        ``ChainIterable`` iterator.
+
+        Args:
+            iterable:  iterable object to wrap in
+        """
+        self._core: Final = iter(iterable)  # type: ignore
+
+    def __iter__(self) -> Iterator[T_co]:
+        return self._core
 
     def __next__(self) -> T_co:
-        return next(self._iterator)
+        return next(self._core)
 
-    def __iter__(self) -> 'Iterator[T_co]':  # type: ignore
-        return iter(self._iterator)
+    def __repr__(self) -> str:
+        return f'ChainIterator wrapper of {type(self._core)} object'
+
+    @staticmethod
+    def _make_with_no_checks(iterator: Iterator[T_co]) -> 'ChainIterator[T_co]':  # type: ignore
+        """
+        Makes class instance with no safety checks.
+
+        Args:
+            iterator:  iterator to wrap around
+
+        Returns:
+            `ChainIterator` wrapper of the iterator
+        """
+        instance = ChainIterator.__new__(ChainIterator)
+        instance._core = iterator  # type: ignore
+        return instance
 
     @property
-    def raw(self) -> Iterator[T_co]:
-        return self._iterator
+    def core(self) -> Iterator[T_co]:
+        """
+        Internal iterator access handler.
+
+        Returns:
+            Raw iterator inside the 'self' instance
+        """
+        return self._core
 
     def iter(self) -> 'ChainIterator[T_co]':
         return self
 
-    @overload  # type: ignore
-    def skip(self,
-             n: int,
-             to_chain_class: Literal[True] = True) -> 'ChainIterator[T_co]':
+    def skip(self, n: int) -> 'ChainIterator[T_co]':
+        next(islice(self._core, n, n), None)
+        return self
+
+
+class ChainReversible(ChainIterable[T_co]):
+    __slots__ = ()
+
+    @overload
+    def __init__(self, iterable: Reversible[T_co], /) -> None:
         pass
 
     @overload
-    def skip(self,
-             n: int,
-             to_chain_class: Literal[False] = False) -> Iterator[T_co]:
+    def __init__(self, iterable: T_co, /, *iterables: T_co) -> None:
         pass
 
-    def skip(self,
-             n: int,
-             to_chain_class: bool = True) -> Union['ChainIterator[T_co]', Iterator[T_co]]:
-        next(islice(self._iterator, n, n), None)
-        if to_chain_class:
-            return self
-        return self._iterator
+    def __init__(self, arg1: Union[Reversible[T_co], T_co], /, *args: T_co) -> None:
+        """
+        Wrapper object that provides convenient chain-like methods for any reversible.
+
+        Possible __init__ signatures:
+
+        (Reversible[T] | *T) -> None
+
+        >>> ChainReversible(3, 4, 5)    # OK
+        ChainReversible of (3, 4, 5)
+
+        >>> ChainReversible((3, 4, 5))  # OK
+        ChainReversible of (3, 4, 5)
+
+        Args:
+            arg1:   reversible if 'args' are not specified. Otherwise - the first value to iterate over
+            *args:  any values to iterate over
+        """
+        if not args:
+            if not hasattr(arg1, '__iter__') and not hasattr(arg1, '__reversed__'):
+                raise TypeError(
+                    'Cannot initialize an instance of `ChainReversible` '
+                    f'from the instance of a non-reversible class {type(arg1)}'
+                )
+            self._core: Final[Reversible[T_co]] = arg1  # type: ignore
+        else:
+            self._core: Final[Tuple[T_co, ...]] = (arg1, *args)  # type: ignore
+
+    def __repr__(self) -> str:
+        return f'ChainReversible of {self._core}'
+
+    def __reversed__(self) -> Iterator[T_co]:
+        return reversed(self._core)
+
+    @staticmethod
+    def _make_with_no_checks(reversible: Reversible[T_co]) -> 'ChainReversible[T_co]':  # type: ignore
+        """
+        Makes class instance with no safety checks.
+
+        >>> ChainReversible._make_with_no_checks((2, 3, 11))
+        ChainReversible of (2, 3, 11)
+
+        >>> ChainReversible._make_with_no_checks(None)
+        ChainReversible of None
+
+        Args:
+            reversible:  iterable to wrap around
+
+        Returns:
+            `ChainIterable` wrapper of the iterable
+        """
+        instance = ChainReversible.__new__(ChainReversible)
+        instance._core = reversible  # type: ignore
+        return instance
+
+    def reverse(self) -> ChainIterator[T_co]:
+        """
+        >>> ChainReversible(2, 3, 4).reverse().collect(tuple)
+        ChainIterable of (4, 3, 2)
+
+        Returns:
+            reversed iterator
+        """
+        return ChainIterator._make_with_no_checks(reversed(self._core))
 
 
-class ChainGenerator(AbstractChainIterator[T_co], Generic[T_co, T_contra, M_co]):
+class ChainGenerator(ChainIterator[T_co], Generic[T_co, T_contra, M_co]):
+    """Wrapper object that provides convenient chain-like methods for any ``generator``."""
+    __slots__ = ()
+
     def __init__(self, generator: Generator[T_co, T_contra, M_co]) -> None:
+        """
+        ``ChainGenerator`` is a chained analogue of the built-in ``generator`` object.
+
+        Args:
+            generator:  stack frame to store
+        """
+
         if not isinstance(generator, GeneratorType):
             if isinstance(generator, ChainGenerator):
-                generator = generator.raw
+                generator = generator.core
             else:
                 raise TypeError(
                     f'{self.__class__.__name__} does not accept non-generator instances of {type(generator)}'
                 )
 
-        self._generator: Final[Generator[T_co, T_contra, M_co]] = generator
+        self._core: Final = generator  # type: ignore
+
+    def __iter__(self) -> Iterator[T_co]:
+        return iter(self._core)
+
+    def __next__(self) -> T_co:
+        return next(self._core)
+
+    def __repr__(self) -> str:
+        return f'<ChainGenerator at {hex(id(self))}>'
+
+    @staticmethod
+    def _make_with_no_checks(  # type: ignore
+            generator: Generator[T_co, T_contra, M_co]) -> 'ChainGenerator[T_co, T_contra, M_co]':
+        """
+        Makes class instance with no safety checks.
+
+        Args:
+            generator:  generator to wrap around
+
+        Returns:
+            `ChainGenerator` wrapper of the generator
+        """
+        instance = ChainGenerator.__new__(ChainGenerator)
+        instance._core = generator  # type: ignore
+        return instance
+
+    @property
+    def core(self) -> Generator[T_co, T_contra, M_co]:
+        """
+        Internal generator access handler.
+
+        Returns:
+            Raw generator inside the 'self' instance
+        """
+        return self._core
+
+    @property
+    def gi_code(self) -> CodeType:
+        return self._core.gi_code
+
+    @property
+    def gi_frame(self) -> FrameType:
+        return self._core.gi_frame
+
+    @property
+    def gi_running(self) -> bool:
+        return self._core.gi_running
+
+    @property
+    def gi_yieldfrom(self) -> Optional[Generator]:
+        return self._core.gi_yieldfrom
+
+    def close(self) -> None:
+        self._core.close()
 
     def send(self, value: T_contra) -> T_co:
-        return self._generator.send(value)
+        return self._core.send(value)
 
     def throw(self,
               exception: Type[BaseException],
               value: Any = None,
               traceback: Optional[TracebackType] = None) -> Any:
-        return self._generator.throw(exception, value, traceback)
+        return self._core.throw(exception, value, traceback)
 
-    def __repr__(self) -> str:
-        return 'ChainGenerator'
 
-    def __iter__(self) -> Iterator[T_co]:
-        return iter(self._generator)
+class ChainRange(ChainIterable[int]):
+    """Chained analogue of the built-in ``range`` object."""
 
-    def __next__(self) -> T_co:
-        return next(self._generator)
+    __slots__ = ()
 
-    def close(self) -> None:
-        self._generator.close()
+    @overload
+    def __init__(self, rng: range, /) -> None:
+        pass
 
-    @property
-    def gi_code(self) -> CodeType:
-        return self._generator.gi_code
+    @overload
+    def __init__(self, stop: int, /) -> None:
+        pass
 
-    @property
-    def gi_frame(self) -> FrameType:
-        return self._generator.gi_frame
+    @overload
+    def __init__(self, start: int, stop: int, /) -> None:
+        pass
 
-    @property
-    def gi_running(self) -> bool:
-        return self._generator.gi_running
+    @overload
+    def __init__(self, start: int, stop: int, step: int, /) -> None:
+        pass
 
-    @property
-    def gi_yieldfrom(self) -> Optional[Generator]:
-        return self._generator.gi_yieldfrom
-
-    @property
-    def raw(self) -> Generator[T_co, T_contra, M_co]:
+    def __init__(self, *args) -> None:
         """
-        Returns:
-            Raw generator inside the 'self' instance
+        ``ChainRange`` is a chained analogue of the built-in ``range`` object.
+
+        Args:
+            *args:  single `range` or `range` init parameters: [start,] stop[, step]
         """
-        return self._generator
-
-
-class ChainRange(Sequence[int], AbstractChainIterable[int]):
-    def __init__(self, *args: Union[int, range]) -> None:
         try:
-            self._range: range = range(*args)  # type: ignore
+            self._core: Final[range] = range(*args)  # type: ignore
         except TypeError:
             if len(args) == 1 and isinstance(range_candidate := args[0], range):
-                self._range: range = range_candidate  # type: ignore
+                self._core: Final[range] = range_candidate  # type: ignore
             else:
                 raise
 
-    @overload
+    def __contains__(self, item: int) -> bool:
+        return item in self._core
+
+    @overload  # type: ignore
     def __getitem__(self, key: int) -> int:
         pass
 
@@ -766,129 +1102,106 @@ class ChainRange(Sequence[int], AbstractChainIterable[int]):
         pass
 
     def __getitem__(self, key: Union[int, slice]) -> Union[int, 'ChainRange']:
+        """
+        Allows to access elements of 'self' by square brace indexing.
+        Common use-case of throwing ``IndexError`` as a negative result of bound checking
+        in case of single value selection is replaced by returning ``None``.
+
+        >>> ChainRange(0, 20, 2)[3:].collect(tuple)
+        ChainIterable of (6, 8, 10, 12, 14, 16, 18)
+
+        >>> ChainRange(0, 20, 2)[3::2].collect(tuple)
+        ChainIterable of (6, 10, 14, 18)
+
+        Args:
+            key:  `int` or `slice`
+        Returns:
+            if 'item' is `slice`, `ChainRange` over the values selected. Otherwise, single value at the position
+        """
         if isinstance(key, slice):
-            _range = self._range[key]
-            if getrefcount(self) == 3:  # WARNING. Is it safe?
-                self._range = _range
-                return self
-            return ChainRange(_range.start, _range.stop, _range.step)
-        return self._range[key]
-
-    def __len__(self) -> int:
-        return len(self._range)
-
-    def __repr__(self) -> str:
-        return f'ChainRange({self._range.__repr__()[6:-1]})'
+            return ChainRange._make_with_no_checks(self._core[key])
+        return self._core[key]
 
     def __iter__(self) -> Iterator[int]:
-        return iter(self._range)
+        return iter(self._core)
+
+    def __len__(self) -> int:
+        return len(self._core)
+
+    def __repr__(self) -> str:
+        return f'ChainRange({self._core.__repr__()[6:-1]})'
+
+    def __reversed__(self) -> Iterator[int]:
+        return reversed(self._core)
+
+    @staticmethod
+    def _make_with_no_checks(rng: range) -> 'ChainRange':  # type: ignore
+        """
+        Makes class instance with no safety checks.
+
+        Args:
+            rng:  `range` object to wrap around
+
+        Returns:
+            `ChainRange` wrapper of the range
+        """
+        instance = ChainRange.__new__(ChainRange)
+        instance._core = rng  # type: ignore
+        return instance
 
     @property
-    def raw(self) -> range:
+    def core(self) -> range:
         """
+        Internal iterable access handler.
+
+        >>> ChainRange(1, 232, 3).core
+        range(1, 232, 3)
+
         Returns:
-            Raw 'range' object inside the 'self' instance
+            Raw `range` object inside the 'self' instance
         """
-        return self._range
+        return self._core
 
+    def count(self, value: int) -> int:
+        return self._core.count(value)
 
-class ChainMap(map,  # type: ignore
-               protocol.Map[T_co, M_co],
-               AbstractChainIterable[T_co]):
-    def __repr__(self) -> str:
-        return 'ChainMap'
+    def index(self, value: int) -> int:
+        return self._core.index(value)
 
+    def len(self) -> int:
+        """
+        Returns the length of the range. Does not iterate anything.
 
-class ChainFilter(filter,  # type: ignore
-                  protocol.Filter[T_co],
-                  AbstractChainIterable[T_co]):
-    def __repr__(self) -> str:
-        return 'ChainFilter'
+        >>> ChainRange(1, 232, 3).len()
+        77
 
-
-class ChainZip(zip,  # type: ignore
-               protocol.Zip[T_co],
-               AbstractChainIterable[Tuple[T_co, ...]]):
-    def __repr__(self) -> str:
-        return 'ChainZip'
-
-
-class ChainTuple(tuple, AbstractChainIterable[T]):
-    pass
-
-
-class ChainList(list, AbstractChainIterable[T]):
-    pass
-
-
-class ISlice(islice,  # type: ignore
-             protocol.Islice[T],
-             AbstractChainIterator[T]):
-    def __iter__(self) -> 'ISlice[T]':
-        return self
-
-
-class Chain(chain,
-            protocol.Chain[T],
-            AbstractChainIterator[T]):
-    def __iter__(self) -> 'Chain[T]':
-        return self
+        Returns:
+            range length
+        """
+        return len(self._core)
 
 
 # Cache dict for storing already created class - to - chain-class associations
 _registered_chain_classes: Final[Dict] = {
     GeneratorType: ChainGenerator,
-    range: ChainRange,
-    map: ChainMap,
-    filter: ChainFilter,
-    zip: ChainZip,
-    tuple: ChainTuple,
-    list: ChainList,
-    islice: ISlice,
-    chain: Chain
+    range: ChainRange
 }
 
 
-def make_chain_class(cls: Type[Iterable[T]]) -> Type[AbstractChainIterable[T]]:
-    """
-    Makes a chained version of the iterable input class.
-
-    Args:
-        cls:  input class
-    Returns:
-        chained version of 'cls'
-    """
-    if issubclass(cls, AbstractChainIterable):
-        return cls
-    try:
-        return _registered_chain_classes[cls]
-    except KeyError:
-        if not issubclass(cls, abc.Iterable):
-            raise TypeError('A chain class can only be created from an iterable type')
-
-    class Extended(cls, AbstractChainIterable[T_co]):  # type: ignore
-        pass
-
-    base_name = cls.__name__
-    Extended.__name__ = Extended.__qualname__ = f'Chain{base_name[0].upper()}{base_name[1:]}'
-
-    _registered_chain_classes[cls] = Extended
-    return Extended
+@overload
+def make_chain(iterable: Iterator[T]) -> ChainIterator[T]:
+    pass
 
 
-def make_chain(iterable: Iterable[T]) -> AbstractChainIterable[T]:
-    """
-    Makes a chaned version of the input iterable object.
+@overload
+def make_chain(iterable: Iterable[T]) -> ChainIterable[T]:
+    pass
 
-    --------------------- Attention! ---------------------
-    Behaves correctly only
-    > for types already registered as keys in the '_registered_chain_classes'
-    > or in the case if the `type(iterable)` can be a constructor for the iterable, i.e.
-    if `type(iterable).__call__(iterable) == iterable` is True.
 
-    Args:
-        iterable:  input iterable object
-    Returns:
-        Chained version of this object
-    """
-    return make_chain_class(type(iterable))(iterable)
+def make_chain(iterable: Iterable[T]) -> ChainIterable[T]:
+    # TODO
+    if hasattr(iterable, '__iter__'):
+        if hasattr(iterable, '__next__'):
+            return ChainIterator._make_with_no_checks(iterable)  # type: ignore
+        return ChainIterable._make_with_no_checks(iterable)
+    raise TypeError('')
