@@ -11,17 +11,17 @@ def replace_call_with_eval_lambda(self, *args, **kwargs):
 class LambdaExpr:
     __slots__ = (
         '_tokens',
-        '_lambda_func'
+        '_lambda'
     )
 
     def __init__(self, *tokens: str) -> None:
         self._tokens: Final[Tuple[str, ...]] = tokens
-        self._lambda_func: Callable = partial(replace_call_with_eval_lambda, self)
+        self._lambda: Callable = partial(replace_call_with_eval_lambda, self)
         # When __call__ is being invoked first time
         # it is replaced with 'eval_lambda' from the 'replace_call_with_eval_lambda' function above
 
     def __call__(self, *args, **kwargs):
-        return self._lambda_func(*args, **kwargs)
+        return self._lambda(*args, **kwargs)
 
     def __repr__(self):
         return f"<{self.__class__.__name__} '{self}' at {hex(id(self))}>"
@@ -45,10 +45,10 @@ class LambdaExpr:
         return sorted(set(self._tokens) & _registered_vars)
 
     def eval_lambda(self) -> Callable:
-        self._lambda_func = eval(
-            f'lambda {",".join(self.get_args())}:{"".join(map(str, self._tokens))}'
+        self._lambda = eval(
+            f'lambda {",".join(self.get_args())}:{"".join(self._tokens)}'
         )
-        return self._lambda_func
+        return self._lambda
 
     def collapse(self, right: Any, *inter_tokens: str) -> 'LambdaExpr':
         if isinstance(right, LambdaExpr):
