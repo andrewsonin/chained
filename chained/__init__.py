@@ -30,6 +30,7 @@ from typing import (
 )
 
 from chained.functions import flat, filter_map, compose_map, compose_filter
+from chained.type_utils.meta import ChainedMeta
 from chained.type_utils.protocol import varArgCallable
 from chained.type_utils.typevar import *
 
@@ -50,7 +51,7 @@ def resolve_appropriate_container(cls):
     return ChainIterable
 
 
-class ChainIterable(Generic[T_co]):
+class ChainIterable(Generic[T_co], metaclass=ChainedMeta):
     """Wrapper object that provides convenient chain-like methods for any iterable."""
 
     # The order of the method definitions here
