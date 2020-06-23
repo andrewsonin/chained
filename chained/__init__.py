@@ -51,19 +51,7 @@ def resolve_appropriate_container(cls):
 
 
 class ChainIterable(Generic[T_co]):
-    """
-    Wrapper object that provides convenient chain-like methods for any iterable.
-
-    >>> ChainIterable(range(10)).map(lambda x: x ** 2).collect(tuple)
-    ChainIterable of (0, 1, 4, 9, 16, 25, 36, 49, 64, 81)
-
-    >>> ChainIterable(i ** 2 for i in range(3, 13))[:2].foreach(print)
-    9
-    16
-
-    >>> ChainIterable([True, True, True, False, True]).all()
-    False
-    """
+    """Wrapper object that provides convenient chain-like methods for any iterable."""
 
     # The order of the method definitions here
     # and in all descendants of the class must obey the following sequence.
@@ -113,7 +101,7 @@ class ChainIterable(Generic[T_co]):
                 )
             self._core: Final[Iterable[T_co]] = arg1  # type: ignore
         else:
-            self._core: Final[Iterable[T_co]] = (arg1, *args)  # type: ignore
+            self._core: Final[Tuple[T_co, ...]] = (arg1, *args)  # type: ignore
 
     @overload
     def __getitem__(self, item: int) -> Optional[int]:
@@ -136,8 +124,7 @@ class ChainIterable(Generic[T_co]):
         ChainIterable of (6, 10, 14, 18)
 
         Args:
-            item: `int` or `slice`
-
+            item:  `int` or `slice`
         Returns:
             if 'item' is `slice`, `ChainIterator` over the values selected. Otherwise, single value at the position
         """
@@ -180,7 +167,6 @@ class ChainIterable(Generic[T_co]):
 
         Args:
             iterable:  iterable to wrap around
-
         Returns:
             `ChainIterable` wrapper of the iterable
         """
@@ -246,7 +232,7 @@ class ChainIterable(Generic[T_co]):
         ChainIterable of (3, 4, 5, 6, 7, 8, 10, 13, 14)
 
         Args:
-            *iterables:      iterables to "extend"
+            *iterables:  iterables to "extend"
         Returns:
             A new iterator which will first iterate over the values from the 'self'
             and then over the values from the iterables
@@ -293,7 +279,6 @@ class ChainIterable(Generic[T_co]):
 
         Args:
             collector:  any callable with signature (Iterable) -> Iterable
-
         Returns:
             Result of this consumption wrapped in the instance of 'ChainIterable'
         """
@@ -310,7 +295,7 @@ class ChainIterable(Generic[T_co]):
         ChainIterable of ((1, 3), (2, 4), (3, 5))
 
         Args:
-            init_value:      initial value to count from
+            init_value:  initial value to count from
         Returns:
             resulting iterator
         """
@@ -361,9 +346,8 @@ class ChainIterable(Generic[T_co]):
 
         Args:
             *predicates:  predicates to apply
-
         Returns:
-            resulting iterator
+             resulting iterator
         """
         iterator = iter(self._core)
         for pred in predicates:
@@ -387,9 +371,8 @@ class ChainIterable(Generic[T_co]):
         ChainIterable of (1.0, 0.5)
 
         Args:
-            function:        function to map
-            *exceptions:     exception to catch
-
+            function:     function to map
+            *exceptions:  exception to catch
         Returns:
             resulting iterator
         """
@@ -650,13 +633,12 @@ class ChainIterable(Generic[T_co]):
         Maps functions to the values of the iterable.
         Functions are called sequentially in the the same order as they passed to the arguments.
 
-        >>> ChainIterable(i ** 2 for i in range(20) if i % 2).map(lambda x: x - 1, str).collect(tuple)
-        ChainIterable of ('0', '8', '24', '48', '80', '120', '168', '224', '288', '360')
+        >>> ChainIterable(range(10)).map(lambda x: x - 1, str).collect(tuple)
+        ChainIterable of ('-1', '0', '1', '2', '3', '4', '5', '6', '7', '8')
 
         Args:
             func:    first function to map
             *funcs:  remaining functions to map
-
         Returns:
             resulting iterator
         """
@@ -825,7 +807,7 @@ class ChainIterable(Generic[T_co]):
         ChainIterable of ((1, 4, 7), (2, 5, 8))
 
         Args:
-            *iterables:      iterables to "zip up"
+            *iterables:  iterables to "zip up"
         Returns:
             A new iterator that will iterate over other iterables,
             returning `tuples` where the first element comes from the 'self',
@@ -950,7 +932,6 @@ class ChainReversible(ChainIterable[T_co]):
 
         Args:
             reversible:  iterable to wrap around
-
         Returns:
             `ChainIterable` wrapper of the iterable
         """
@@ -1008,7 +989,6 @@ class ChainGenerator(ChainIterator[T_co], Generic[T_co, T_contra, M_co]):
 
         Args:
             generator:  generator to wrap around
-
         Returns:
             `ChainGenerator` wrapper of the generator
         """
@@ -1142,7 +1122,6 @@ class ChainRange(ChainIterable[int]):
 
         Args:
             rng:  `range` object to wrap around
-
         Returns:
             `ChainRange` wrapper of the range
         """
