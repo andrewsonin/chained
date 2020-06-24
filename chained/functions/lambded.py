@@ -1,6 +1,6 @@
 from functools import partial
 from keyword import iskeyword
-from typing import Tuple, Final, MutableSet, Callable, Optional, Any, List
+from typing import Tuple, Final, MutableSet, Callable, Optional, Any, List, Generator, Union
 
 from chained.type_utils.meta import ChainedMeta
 
@@ -23,7 +23,7 @@ class LambdaExpr(metaclass=ChainedMeta):
 
     def __call__(self, *args, **kwargs):
         # When the object of type 'LambdaExpr' is called for the first time,
-        # the class attribute '_lambda' is replaced with the one that evaluated by '_eval'.
+        # the class attribute '_lambda' is replaced with the one that evaluated by the '_eval' method.
         return self._lambda(*args, **kwargs)
 
     def __getattr__(self, name: str) -> 'LambdaExpr':
@@ -38,12 +38,21 @@ class LambdaExpr(metaclass=ChainedMeta):
         Args:
             name:  name of an attribute
         Returns:
-            Corresponding lambda-expression
+            Corresponding lambda expression
         """
-        return LambdaExpr('(', *self._tokens, ').', name)
+        return LambdaExpr('(', *self._tokens, f').{name}')
 
     def __repr__(self) -> str:
-        return f"<{self.__class__.__name__} '{self}' at {hex(id(self))}>"
+        """
+        >>> x = LambdaExpr('x')
+        >>> y = LambdaExpr('y')
+        >>> (x - y).__repr__()
+        '(x)-y'
+
+        Returns:
+            __repr__ of the `LambdaExpr`
+        """
+        return ''.join(map(str, self._tokens))
 
     def __str__(self) -> str:
         """
@@ -56,6 +65,89 @@ class LambdaExpr(metaclass=ChainedMeta):
             string representation of the `LambdaExpr`
         """
         return ''.join(map(str, self._tokens))
+
+    def _(self, *args: str, **kwargs: str) -> 'LambdaExpr':
+        """
+        Emulates ``__call__`` inside lambda expression.
+
+        >>> x = LambdaExpr('x')
+        >>> x._('4', 'a', k='23', www='32')
+        (x)(4,a,k=23,www=32)
+
+        >>> x = LambdaExpr('x')
+        >>> x._('4', "'a'", k='23', www='32')
+        (x)(4,'a',k=23,www=32)
+
+        >>> x._(k='23', www='32')
+        (x)(k=23,www=32)
+
+        >>> x._('4', 'a')
+        (x)(4,a)
+
+        >>> x._('4')
+        (x)(4)
+
+        >>> x._(kwarg='kw')
+        (x)(kwarg=kw)
+
+        >>> x._()
+        (x)()
+
+        Args:
+            *args:     positional arguments to pass
+            **kwargs:  keyword arguments to pass
+        Returns:
+            lambda expression
+        """
+
+        need_kwarg_comma = False
+
+        def args_formatter() -> Generator[str, None, None]:
+            it = iter(args)
+            try:
+                arg = next(it)
+            except StopIteration:
+                return
+
+            if not isinstance(arg, str):
+                raise TypeError(f'Arguments should be of type `str`, got `{type(arg)}` (positional arg: {arg})')
+            yield arg
+
+            nonlocal need_kwarg_comma
+            need_kwarg_comma = True
+
+            for arg in it:
+                if not isinstance(arg, str):
+                    raise TypeError(f'Arguments should be of type `str`, got `{type(arg)}` (positional arg: {arg})')
+                yield ','
+                yield arg
+
+        def kwargs_formatter() -> Generator[str, None, None]:
+            it = iter(kwargs.items())
+            try:
+                k, v = next(it)
+            except StopIteration:
+                return
+
+            if not isinstance(v, str):
+                raise TypeError(f'Arguments should be of type `str`, got `{type(v)}` (kwarg: {k}={v})')
+            if need_kwarg_comma:
+                yield ','
+            yield f'{k}='
+            yield v
+
+            for k, v in it:
+                if not isinstance(v, str):
+                    raise TypeError(f'Arguments should be of type `str`, got `{type(v)}` (kwarg: {k}={v})')
+                yield f',{k}='
+                yield v
+
+        return LambdaExpr(
+            '(', *self._tokens, ')(',
+            *args_formatter(),
+            *kwargs_formatter(),
+            ')'
+        )
 
     def _collapse(self, right: Any, *inter_tokens: str) -> 'LambdaExpr':
         if isinstance(right, LambdaExpr):
@@ -71,9 +163,9 @@ class LambdaExpr(metaclass=ChainedMeta):
         )
 
     def _eval(self) -> Callable:
-        """Evaluates tokens in a lambda function"""
-        evaluated_lambda: Callable = eval(
-            f'lambda {",".join(self._get_args())}:{"".join(self._tokens)}'
+        """Evaluates tokens into a lambda function"""
+        evaluated_lambda = eval(
+            f'lambda {",".join(self._get_args())}:{self}'
         )
         self._lambda = evaluated_lambda
         return evaluated_lambda
@@ -94,7 +186,7 @@ class LambdaExpr(metaclass=ChainedMeta):
     def __abs__(self) -> 'LambdaExpr':
         return LambdaExpr('abs(', *self._tokens, ')')
 
-    def __round__(self, n: Optional[int] = None) -> 'LambdaExpr':
+    def __round__(self, n: Optional[Union[int, str, 'LambdaExpr']] = None) -> 'LambdaExpr':
         """
         >>> x = LambdaExpr('x')
         >>> tuple(map(round(x), (3.4, 44.334)))
@@ -108,7 +200,8 @@ class LambdaExpr(metaclass=ChainedMeta):
         Returns:
             rounded number
         """
-        return LambdaExpr('round(', *self._tokens, f',{n})')
+        n = n._tokens if isinstance(n, LambdaExpr) else (n,)  # type: ignore
+        return LambdaExpr('round(', *self._tokens, ',', *n, ')')  # type: ignore
 
     # >>> Comparison methods
     def __eq__(self, other) -> 'LambdaExpr':  # type: ignore
@@ -215,7 +308,7 @@ class LambdaExpr(metaclass=ChainedMeta):
         return LambdaExpr('reversed(', *self._tokens, ')')
 
     def __contains__(self, item) -> 'LambdaExpr':
-        return LambdaExpr(f'{item} in (', *self._tokens, ')')
+        return LambdaExpr(item, ' in (', *self._tokens, ')')
 
 
 _registered_vars: Final[MutableSet[str]] = set()
