@@ -10,6 +10,14 @@ def _call_monkey_patcher(self, *args, **kwargs):
     return self._eval()(*args, **kwargs)
 
 
+def _token_expander(value: Any) -> Generator[Any, None, None]:
+    if isinstance(value, LambdaExpr):
+        for token in value._tokens:
+            yield token
+    else:
+        yield value
+
+
 class LambdaExpr(metaclass=ChainedMeta):
     """Implements functionality for shortened creation of lambda functions."""
     __slots__ = (
@@ -72,23 +80,23 @@ class LambdaExpr(metaclass=ChainedMeta):
 
         >>> x = LambdaExpr('x')
         >>> x._('4', 'a', k='23', www='32')
-        (x)(4,a,k=23,www=32)
+        (x)((4),(a),k=(23),www=(32),)
 
         >>> x = LambdaExpr('x')
         >>> x._('4', "'a'", k='23', www='32')
-        (x)(4,'a',k=23,www=32)
+        (x)((4),('a'),k=(23),www=(32),)
 
         >>> x._(k='23', www='32')
-        (x)(k=23,www=32)
+        (x)(k=(23),www=(32),)
 
         >>> x._('4', 'a')
-        (x)(4,a)
+        (x)((4),(a),)
 
         >>> x._('4')
-        (x)(4)
+        (x)((4),)
 
         >>> x._(kwarg='kw')
-        (x)(kwarg=kw)
+        (x)(kwarg=(kw),)
 
         >>> x._()
         (x)()
@@ -100,47 +108,21 @@ class LambdaExpr(metaclass=ChainedMeta):
             lambda expression
         """
 
-        need_kwarg_comma = False
-
         def args_formatter() -> Generator[str, None, None]:
-            it = iter(args)
-            try:
-                arg = next(it)
-            except StopIteration:
-                return
-
-            if not isinstance(arg, str):
-                raise TypeError(f'Arguments should be of type `str`, got `{type(arg)}` (positional arg: {arg})')
-            yield arg
-
-            nonlocal need_kwarg_comma
-            need_kwarg_comma = True
-
-            for arg in it:
-                if not isinstance(arg, str):
-                    raise TypeError(f'Arguments should be of type `str`, got `{type(arg)}` (positional arg: {arg})')
-                yield ','
-                yield arg
+            for arg in args:
+                yield '('
+                for sub_arg in _token_expander(arg):
+                    yield sub_arg
+                yield '),'
 
         def kwargs_formatter() -> Generator[str, None, None]:
-            it = iter(kwargs.items())
-            try:
-                k, v = next(it)
-            except StopIteration:
-                return
-
-            if not isinstance(v, str):
-                raise TypeError(f'Arguments should be of type `str`, got `{type(v)}` (kwarg: {k}={v})')
-            if need_kwarg_comma:
-                yield ','
-            yield f'{k}='
-            yield v
-
-            for k, v in it:
+            for k, v in kwargs.items():
                 if not isinstance(v, str):
                     raise TypeError(f'Arguments should be of type `str`, got `{type(v)}` (kwarg: {k}={v})')
-                yield f',{k}='
-                yield v
+                yield f'{k}=('
+                for sub_arg in _token_expander(v):
+                    yield sub_arg
+                yield '),'
 
         return LambdaExpr(
             '(', *self._tokens, ')(',
