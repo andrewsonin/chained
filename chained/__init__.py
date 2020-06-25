@@ -1,5 +1,5 @@
 from collections import deque
-from itertools import islice, chain, zip_longest
+from itertools import islice, chain, zip_longest, starmap, count
 from types import GeneratorType, TracebackType, CodeType, FrameType
 from typing import (
 
@@ -40,9 +40,12 @@ __all__: Final = (
     'ChainIterator',
     'ChainGenerator',
     'ChainRange',
+    'Range',
 
     # Functions and decorators
-    'make_chain'
+    'make_chain',
+    'seq',
+    'c'
 )
 
 
@@ -740,6 +743,12 @@ class ChainIterable(Generic[T_co], metaclass=ChainedMeta):
             islice(self._core, *args)
         )
 
+    def starmap(self, func, /, *funcs) -> 'ChainIterator':
+        iterator = starmap(func, self._core)
+        for func in funcs:
+            iterator = starmap(func, iterator)
+        return ChainIterator._make_with_no_checks(iterator)
+
     def step_by(self, step: int) -> 'ChainIterator[T_co]':
         """
         Returns every `step`-th item of the 'self' as an iterator.
@@ -1186,3 +1195,30 @@ def make_chain(iterable: Iterable[T]) -> ChainIterable[T]:
             return ChainIterator._make_with_no_checks(iterable)  # type: ignore
         return ChainIterable._make_with_no_checks(iterable)
     raise TypeError('')
+
+
+def seq(*iterable, end: Optional[int] = None):
+    for i, elem in enumerate(iterable):
+        if elem is ...:
+            break
+    else:
+        return ChainIterable._make_with_no_checks(iterable)
+    if i == 1:
+        step = 1
+        if len(iterable) not in (2, 3):
+            raise IndexError('Only 3 or 2 arguments allowed while Ellipsis is a placeholder on the 1st index')
+    elif i == 2:
+        step = iterable[1] - iterable[0]
+        if len(iterable) not in (3, 4):
+            raise IndexError('Only 4 or 3 arguments allowed while Ellipsis is a placeholder on the 2st index')
+    else:
+        raise TypeError('Ellipsis can be a placeholder only on the 2nd or 3rd positions')
+    if (right_bound := iterable[-1]) is not ...:
+        return ChainRange(iterable[0], right_bound, step)
+    if end is None:
+        return ChainIterator._make_with_no_checks(count(iterable[0], step))
+    return ChainRange(iterable[0], end + 1, step)
+
+
+c = seq
+Range = ChainRange

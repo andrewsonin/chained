@@ -465,3 +465,7 @@ class LambdaKwargs(_StarredLambdaVar):
 
 
 _registered_vars: Final[Dict[str, LambdaVar]] = {}
+
+x = LambdaVar('x')
+y = LambdaVar('y')
+z = LambdaVar('z')
