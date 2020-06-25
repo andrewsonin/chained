@@ -290,7 +290,7 @@ class LambdaExpr(metaclass=ChainedMeta):
     def __floordiv__(self, other) -> 'LambdaExpr':
         return self._collapse('//', other)
 
-    def __div__(self, other) -> 'LambdaExpr':
+    def __truediv__(self, other) -> 'LambdaExpr':
         return self._collapse('/', other)
 
     def __mod__(self, other) -> 'LambdaExpr':

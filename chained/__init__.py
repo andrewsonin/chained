@@ -30,6 +30,7 @@ from typing import (
 )
 
 from chained.functions import flat, filter_map, compose_map, compose_filter
+from chained.type_utils import *
 from chained.type_utils.meta import ChainedMeta
 from chained.type_utils.protocol import varArgCallable
 from chained.type_utils.typevar import *
@@ -455,8 +456,8 @@ class ChainIterable(Generic[T_co], metaclass=ChainedMeta):
         """
         Converts 'self' to the instance of ``ChainIterator``.
 
-        >>> ChainIterable(range(100)).iter()
-        ChainIterator wrapper of <class 'range_iterator'> object
+        >>> str(ChainIterable(range(100)).iter())[:51]
+        'ChainIterator wrapper of <range_iterator object at '
 
         Returns:
             Corresponding `ChainIterator`
@@ -743,7 +744,7 @@ class ChainIterable(Generic[T_co], metaclass=ChainedMeta):
             islice(self._core, *args)
         )
 
-    def starmap(self, func, /, *funcs) -> 'ChainIterator':
+    def starmap(self: 'ChainIterable[Iterable[M_co]]', func, /, *funcs) -> 'ChainIterator':
         iterator = starmap(func, self._core)
         for func in funcs:
             iterator = starmap(func, iterator)
@@ -849,7 +850,7 @@ class ChainIterator(ChainIterable[T_co]):
         return next(self._core)
 
     def __repr__(self) -> str:
-        return f'ChainIterator wrapper of {type(self._core)} object'
+        return f'ChainIterator wrapper of {self._core}'
 
     @staticmethod
     def _make_with_no_checks(iterator: Iterator[T_co]) -> 'ChainIterator[T_co]':  # type: ignore
@@ -1179,6 +1180,124 @@ _registered_chain_classes: Final[Dict] = {
 
 
 @overload
+def seq(start: int, ell: 'ellipsis', /) -> ChainIterator[int]:
+    pass
+
+
+@overload
+def seq(start: int, ell: 'ellipsis', end: int, /) -> ChainRange:
+    pass
+
+
+@overload
+def seq(start: int, second: int, ell: 'ellipsis', /) -> ChainIterator[int]:
+    pass
+
+
+@overload
+def seq(start: int, second: int, ell: 'ellipsis', end: int, /) -> ChainRange:
+    pass
+
+
+@overload
+def seq(start: int, ell: 'ellipsis', /, *, last: int) -> ChainRange:
+    pass
+
+
+@overload
+def seq(start: int, second: int, ell: 'ellipsis', /, *, last: int) -> ChainRange:
+    pass
+
+
+@overload
+def seq(*args: int) -> ChainIterable[int]:
+    pass
+
+
+def seq(*args: Union[int, 'ellipsis'], last: Optional[int] = None) -> ChainIterable[int]:
+    """
+    Creates a sequence that can be one of the following seven types.
+
+    >>> seq(3, ...)              # [3, +∞)                 # step = 1
+    ChainIterator wrapper of count(3)
+
+    >>> seq(3, ..., 10)          # [3, 10)                 # step = 1
+    ChainRange(3, 10)
+
+    >>> seq(2, 5, ...)           # [2, 5, 8, 11, ..., +∞)  # step = 3
+    ChainIterator wrapper of count(2, 3)
+
+    >>> seq(2, 5, ..., 10)       # [2, 5, 8]               # step = 3
+    ChainRange(2, 10, 3)
+
+    >>> seq(2, ..., last=5)      # [2, 5]                  # step = 1
+    ChainRange(2, 6)
+
+    >>> seq(2, 4, ..., last=10)  # [2, 4, 6, 8, 10]        # step = 2
+    ChainRange(2, 11, 2)
+
+    >>> seq(1, 3, -1, -22, 1)    # [1, 3, -1, -22, 1]      # arbitrary sequence
+    ChainIterable of (1, 3, -1, -22, 1)
+
+    Args:
+        *args:  positional arguments as in the examples
+        last:   optional last element of the sequence
+    Returns:
+        resulting sequence
+    """
+    for i, elem in enumerate(args):
+        if elem is Ellipsis:
+            break
+    else:
+        return ChainIterable._make_with_no_checks(args)  # type: ignore
+
+    arg_length = len(args)
+    left_bound = args[0]
+    if i == 1:
+        if arg_length == 2:
+            if last is None:
+                return ChainIterator._make_with_no_checks(count(left_bound))  # type: ignore
+            return ChainRange(left_bound, last + 1)  # type: ignore
+        if arg_length == 3:
+            if last is not None:
+                raise ValueError(
+                    "Parameter 'last' should not be defined "
+                    'if positional arguments obey the following pattern: (start, ..., stop)'
+                )
+            return ChainRange(left_bound, args[-1])  # type: ignore
+        raise IndexError(
+            'The number of positional arguments should not exceed 3 '
+            'in the case when the Ellipsis is in the 1st index position. '
+            '(start, ...), (start, ..., stop), (arg1, ..., last=last) signatures are only allowed'
+        )
+    elif i == 2:
+        step = args[1] - left_bound  # type: ignore
+        if arg_length == 3:
+            if last is None:
+                return ChainIterator._make_with_no_checks(count(left_bound, step))  # type: ignore
+            return ChainRange(left_bound, last + 1, step)  # type: ignore
+        if arg_length == 4:
+            if last is not None:
+                raise ValueError(
+                    "Parameter 'last' should not be defined "
+                    'if positional arguments obey the following pattern: (start, second, ..., stop)'
+                )
+            return ChainRange(left_bound, args[-1], step)  # type: ignore
+        raise IndexError(
+            'The number of positional arguments should not exceed 4 '
+            'in the case when the Ellipsis is in the 2st index position. (start, second, ...), '
+            '(start, second, ..., stop), (arg1, second, ..., last=last) signatures are only allowed'
+        )
+    raise IndexError(
+        'Ellipsis can be a placeholder only at the 1st or the 2nd index positions'
+    )
+
+
+c = seq
+Range = ChainRange
+
+
+@overload
 def make_chain(iterable: Iterator[T]) -> ChainIterator[T]:
     pass
 
@@ -1195,30 +1314,3 @@ def make_chain(iterable: Iterable[T]) -> ChainIterable[T]:
             return ChainIterator._make_with_no_checks(iterable)  # type: ignore
         return ChainIterable._make_with_no_checks(iterable)
     raise TypeError('')
-
-
-def seq(*iterable, end: Optional[int] = None):
-    for i, elem in enumerate(iterable):
-        if elem is ...:
-            break
-    else:
-        return ChainIterable._make_with_no_checks(iterable)
-    if i == 1:
-        step = 1
-        if len(iterable) not in (2, 3):
-            raise IndexError('Only 3 or 2 arguments allowed while Ellipsis is a placeholder on the 1st index')
-    elif i == 2:
-        step = iterable[1] - iterable[0]
-        if len(iterable) not in (3, 4):
-            raise IndexError('Only 4 or 3 arguments allowed while Ellipsis is a placeholder on the 2st index')
-    else:
-        raise TypeError('Ellipsis can be a placeholder only on the 2nd or 3rd positions')
-    if (right_bound := iterable[-1]) is not ...:
-        return ChainRange(iterable[0], right_bound, step)
-    if end is None:
-        return ChainIterator._make_with_no_checks(count(iterable[0], step))
-    return ChainRange(iterable[0], end + 1, step)
-
-
-c = seq
-Range = ChainRange
