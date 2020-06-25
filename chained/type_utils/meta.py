@@ -5,6 +5,7 @@ from chained.functions import cleandoc_deco
 
 class ChainedMeta(type):
     """Supplemental metaclass for the needs of this project"""
+    __slots__ = ()
 
     def __new__(mcs, name, bases, attrs):
         # Performs cleandoc of the attribute docstrings

@@ -1,19 +1,32 @@
 from functools import partial
 from keyword import iskeyword
-from typing import Tuple, Final, MutableSet, Callable, Optional, Any, List, Generator, Union
+from typing import Tuple, Final, Callable, Any, List, Generator, NoReturn, Dict
 
 from chained.type_utils.meta import ChainedMeta
 
 
 def _call_monkey_patcher(self, *args, **kwargs):
     """LambdaExpr.__call__ monkey patcher"""
-    return self._eval()(*args, **kwargs)
+    return self.eval()(*args, **kwargs)
 
 
 def _token_expander(value: Any) -> Generator[Any, None, None]:
+    """Expands tokens from an instance of ``LambdaExpr``. Otherwise - yields single 'value'.
+
+    >>> x = LambdaExpr('x', '+', 'y')
+    >>> tuple(_token_expander(x))
+    ('x', '+', 'y')
+
+    >>> tuple(_token_expander('value'))
+    ('value',)
+
+    Args:
+        value:  token or `LambdaExpr` to expand
+    Returns:
+        resulting generator
+    """
     if isinstance(value, LambdaExpr):
-        for token in value._tokens:
-            yield token
+        yield from value._tokens
     else:
         yield value
 
@@ -22,16 +35,17 @@ class LambdaExpr(metaclass=ChainedMeta):
     """Implements functionality for shortened creation of lambda functions."""
     __slots__ = (
         '_tokens',
-        '_lambda'
+        '_lambda',
+        '_string_repr'
     )
 
-    def __init__(self, *tokens: str) -> None:
-        self._tokens: Final[Tuple[str, ...]] = tokens
+    def __init__(self, *tokens: Any) -> None:
+        self._tokens: Final[Tuple[Any, ...]] = tokens
         self._lambda: Callable = partial(_call_monkey_patcher, self)
 
     def __call__(self, *args, **kwargs):
         # When the object of type 'LambdaExpr' is called for the first time,
-        # the class attribute '_lambda' is replaced with the one that evaluated by the '_eval' method.
+        # the class attribute '_lambda' is replaced with the one that evaluated by the 'eval' method.
         return self._lambda(*args, **kwargs)
 
     def __getattr__(self, name: str) -> 'LambdaExpr':
@@ -52,54 +66,69 @@ class LambdaExpr(metaclass=ChainedMeta):
 
     def __repr__(self) -> str:
         """
-        >>> x = LambdaExpr('x')
-        >>> y = LambdaExpr('y')
-        >>> (x - y).__repr__()
-        '(x)-y'
+        >>> x = LambdaVar('x')
+        >>> y = LambdaVar('y')
+        >>> (x - y).__repr__()[:35]
+        '<LambdaExpr(lambda x,y:(x)-(y)) at '
 
         Returns:
             __repr__ of the `LambdaExpr`
         """
-        return ''.join(map(str, self._tokens))
+        try:
+            string_repr = self.__getattribute__('_string_repr')
+        except AttributeError:
+            self.eval()
+            string_repr = self._string_repr
+        return f'<{self.__class__.__name__}({string_repr}) at {hex(id(self))}>'
 
     def __str__(self) -> str:
         """
-        >>> x = LambdaExpr('x')
-        >>> y = LambdaExpr('y')
+        >>> x = LambdaVar('x')
+        >>> y = LambdaVar('y')
         >>> str(x - y)
-        '(x)-y'
+        '(x)-(y)'
 
         Returns:
             string representation of the `LambdaExpr`
         """
-        return ''.join(map(str, self._tokens))
 
-    def _(self, *args: str, **kwargs: str) -> 'LambdaExpr':
+        def tok_filter():
+            for tok in map(str, self._tokens):
+                if tok[0] != '*' or len(tok) < 3:  # Normal variable, or "*", or "**"
+                    yield tok
+                elif tok[1] != '*':
+                    yield tok[1:]  # *args
+                else:
+                    yield tok[2:]  # **kwargs
+
+        return ''.join(tok_filter())
+
+    def _(self, *args, **kwargs) -> 'LambdaExpr':
         """
-        Emulates ``__call__`` inside lambda expression.
+        Emulates ``__call__`` inside ``LambdaExpr``.
 
         >>> x = LambdaExpr('x')
-        >>> x._('4', 'a', k='23', www='32')
-        (x)((4),(a),k=(23),www=(32),)
+        >>> str(x._('4', 'a', k='23', www='32'))
+        '(x)((4),(a),k=(23),www=(32),)'
 
         >>> x = LambdaExpr('x')
-        >>> x._('4', "'a'", k='23', www='32')
-        (x)((4),('a'),k=(23),www=(32),)
+        >>> str(x._('4', "'a'", k='23', www='32'))
+        "(x)((4),('a'),k=(23),www=(32),)"
 
-        >>> x._(k='23', www='32')
-        (x)(k=(23),www=(32),)
+        >>> str(x._(k='23', www='32'))
+        '(x)(k=(23),www=(32),)'
 
-        >>> x._('4', 'a')
-        (x)((4),(a),)
+        >>> str(x._('4', 'a'))
+        '(x)((4),(a),)'
 
-        >>> x._('4')
-        (x)((4),)
+        >>> str(x._('4'))
+        '(x)((4),)'
 
-        >>> x._(kwarg='kw')
-        (x)(kwarg=(kw),)
+        >>> str(x._(kwarg='kw'))
+        '(x)(kwarg=(kw),)'
 
-        >>> x._()
-        (x)()
+        >>> str(x._())
+        '(x)()'
 
         Args:
             *args:     positional arguments to pass
@@ -108,52 +137,95 @@ class LambdaExpr(metaclass=ChainedMeta):
             lambda expression
         """
 
-        def args_formatter() -> Generator[str, None, None]:
+        def args_tokenizer() -> Generator[Any, None, None]:
             for arg in args:
                 yield '('
-                for sub_arg in _token_expander(arg):
-                    yield sub_arg
+                yield from _token_expander(arg)
                 yield '),'
 
-        def kwargs_formatter() -> Generator[str, None, None]:
+        def kwargs_tokenizer() -> Generator[Any, None, None]:
             for k, v in kwargs.items():
-                if not isinstance(v, str):
-                    raise TypeError(f'Arguments should be of type `str`, got `{type(v)}` (kwarg: {k}={v})')
                 yield f'{k}=('
-                for sub_arg in _token_expander(v):
-                    yield sub_arg
+                yield from _token_expander(v)
                 yield '),'
 
         return LambdaExpr(
             '(', *self._tokens, ')(',
-            *args_formatter(),
-            *kwargs_formatter(),
+            *args_tokenizer(),
+            *kwargs_tokenizer(),
             ')'
         )
 
-    def _collapse(self, right: Any, *inter_tokens: str) -> 'LambdaExpr':
+    def _collapse(self, inter_token: str, right: 'LambdaExpr') -> 'LambdaExpr':
+        """Collapses 'self' with 'right' so that they are both evaluated before the effect of 'inter_token'
+
+        >>> x = LambdaExpr('x')
+        >>> y = LambdaExpr('y')
+        >>> z = LambdaExpr('z')
+        >>> str(x._collapse('*', y + z))
+        '(x)*((y)+(z))'
+
+        Args:
+            inter_token:  middle token
+            right:        instance of `LambdaExpr` to the right
+        Returns:
+            resulting `LambdaExpr`
+        """
         if isinstance(right, LambdaExpr):
             return LambdaExpr(
                 '(', *self._tokens, ')',
-                *inter_tokens,
-                *right._tokens
+                inter_token,
+                '(', *right._tokens, ')'
             )
         return LambdaExpr(
             '(', *self._tokens, ')',
-            *inter_tokens,
-            right
+            inter_token,
+            '(', right, ')'
         )
-
-    def _eval(self) -> Callable:
-        """Evaluates tokens into a lambda function"""
-        evaluated_lambda = eval(
-            f'lambda {",".join(self._get_args())}:{self}'
-        )
-        self._lambda = evaluated_lambda
-        return evaluated_lambda
 
     def _get_args(self) -> List:
-        return sorted(set(self._tokens) & _registered_vars)
+        """Returns an argument list of a future lambda function built on the ``LambdaExpr``.
+
+        Returns:
+            argument list
+        """
+
+        try:
+            arg_set = set(self._tokens) & _registered_vars.keys()
+        except TypeError:
+            print(self._tokens)
+            raise
+
+        starred_args = []
+        if (args := '*args') in arg_set:
+            arg_set.remove(args)
+            starred_args.append(args)
+        if (kwargs := '**kwargs') in arg_set:
+            arg_set.remove(kwargs)
+            starred_args.append(kwargs)
+
+        arg_list = sorted(arg_set)
+        arg_list += starred_args
+
+        return arg_list
+
+    def eval(self) -> Callable:
+        """Evaluates tokens into a lambda function.
+
+        >>> x = LambdaVar('x')
+        >>> y = LambdaVar('y')
+        >>> func = (x * y - 3 + 1).eval()
+        >>> func(3, 4)
+        10
+
+        >>> func(2, 2)
+        2
+        """
+        string_repr = f'lambda {",".join(self._get_args())}:{self}'
+        self._string_repr: str = string_repr
+        evaluated_lambda = eval(string_repr)
+        self._lambda = evaluated_lambda
+        return evaluated_lambda
 
     # >>> Unary operators
     def __pos__(self) -> 'LambdaExpr':
@@ -168,9 +240,9 @@ class LambdaExpr(metaclass=ChainedMeta):
     def __abs__(self) -> 'LambdaExpr':
         return LambdaExpr('abs(', *self._tokens, ')')
 
-    def __round__(self, n: Optional[Union[int, str, 'LambdaExpr']] = None) -> 'LambdaExpr':
+    def __round__(self, n=None) -> 'LambdaExpr':
         """
-        >>> x = LambdaExpr('x')
+        >>> x = LambdaVar('x')
         >>> tuple(map(round(x), (3.4, 44.334)))
         (3, 44)
 
@@ -182,70 +254,74 @@ class LambdaExpr(metaclass=ChainedMeta):
         Returns:
             rounded number
         """
-        n = n._tokens if isinstance(n, LambdaExpr) else (n,)  # type: ignore
-        return LambdaExpr('round(', *self._tokens, ',', *n, ')')  # type: ignore
+        n = n._tokens if isinstance(n, LambdaExpr) else (n,)
+        return LambdaExpr('round(', *self._tokens, ',', *n, ')')
 
     # >>> Comparison methods
     def __eq__(self, other) -> 'LambdaExpr':  # type: ignore
-        return self._collapse(other, '==')
+        """
+        >>> str(LambdaExpr('x') == LambdaExpr('y'))
+        '(x)==(y)'
+        """
+        return self._collapse('==', other)
 
     def __ne__(self, other) -> 'LambdaExpr':  # type: ignore
-        return self._collapse(other, '!=')
+        return self._collapse('!=', other)
 
     def __lt__(self, other) -> 'LambdaExpr':
-        return self._collapse(other, '<')
+        return self._collapse('<', other)
 
     def __gt__(self, other) -> 'LambdaExpr':
-        return self._collapse(other, '>')
+        return self._collapse('>', other)
 
     def __le__(self, other) -> 'LambdaExpr':
-        return self._collapse(other, '<=')
+        return self._collapse('<=', other)
 
     def __ge__(self, other) -> 'LambdaExpr':
-        return self._collapse(other, '>=')
+        return self._collapse('>=', other)
 
     # >>> Normal arithmetic operators
     def __add__(self, other) -> 'LambdaExpr':
-        return self._collapse(other, '+')
+        return self._collapse('+', other)
 
     def __sub__(self, other) -> 'LambdaExpr':
-        return self._collapse(other, '-')
+        return self._collapse('-', other)
 
     def __mul__(self, other) -> 'LambdaExpr':
-        return self._collapse(other, '*')
+        return self._collapse('*', other)
 
     def __floordiv__(self, other) -> 'LambdaExpr':
-        return self._collapse(other, '//')
+        return self._collapse('//', other)
 
     def __div__(self, other) -> 'LambdaExpr':
-        return self._collapse(other, '/')
+        return self._collapse('/', other)
 
     def __mod__(self, other) -> 'LambdaExpr':
-        return self._collapse(other, '%')
+        return self._collapse('%', other)
 
     def __divmod__(self, other) -> 'LambdaExpr':
         return LambdaExpr('divmod(', *self._tokens, ')')
 
     def __pow__(self, other) -> 'LambdaExpr':
-        return self._collapse(other, '**')
+        return self._collapse('**', other)
 
     def __matmul__(self, other) -> 'LambdaExpr':
-        return self._collapse(other, '@')
+        return self._collapse('@', other)
 
     def __lshift__(self, other) -> 'LambdaExpr':
-        return self._collapse(other, '<<')
+        return self._collapse('<<', other)
 
     def __rshift__(self, other) -> 'LambdaExpr':
-        return self._collapse(other, '>>')
+        return self._collapse('>>', other)
 
     def __and__(self, other) -> 'LambdaExpr':
-        return self._collapse(other, '&')
+        return self._collapse('&', other)
 
     def __or__(self, other) -> 'LambdaExpr':
-        return self._collapse(other, '|')
+        return self._collapse('|', other)
 
     def __xor__(self, other) -> 'LambdaExpr':
-        return self._collapse(other, '^')
+        return self._collapse('^', other)
 
     # >>> Type conversion magic methods
     def __int__(self) -> 'LambdaExpr':
@@ -275,13 +351,13 @@ class LambdaExpr(metaclass=ChainedMeta):
         return LambdaExpr('len(', *self._tokens, ')')
 
     def __getitem__(self, key) -> 'LambdaExpr':
-        return LambdaExpr('(', *self._tokens, f')[{key}]')
+        return LambdaExpr('(', *self._tokens, ')[', key, ']')
 
     def __setitem__(self, key, value) -> 'LambdaExpr':
-        return LambdaExpr('(', *self._tokens, f')[{key}]={value}')
+        return LambdaExpr('(', *self._tokens, ')[', key, ']=(', value, ')')
 
     def __delitem__(self, key) -> 'LambdaExpr':
-        return LambdaExpr('del (', *self._tokens, f')[{key}]')
+        return LambdaExpr('del (', *self._tokens, ')[', key, ']')
 
     def __iter__(self) -> 'LambdaExpr':
         return LambdaExpr('iter(', *self._tokens, ')')
@@ -290,58 +366,98 @@ class LambdaExpr(metaclass=ChainedMeta):
         return LambdaExpr('reversed(', *self._tokens, ')')
 
     def __contains__(self, item) -> 'LambdaExpr':
-        return LambdaExpr(item, ' in (', *self._tokens, ')')
+        return LambdaExpr('(', item, ') in (', *self._tokens, ')')
+
+    # Keywords substitutes
+    def _if(self, cond, /) -> 'LambdaExpr':
+        cond = cond._tokens if isinstance(cond, LambdaExpr) else (cond,)
+        return LambdaExpr('(', *self._tokens, ') if (', *cond, ')')
+
+    def _else(self, alt, /) -> 'LambdaExpr':
+        alt = alt._tokens if isinstance(alt, LambdaExpr) else (alt,)
+        return LambdaExpr(*self._tokens, ' else (', *alt, ')')
+
+    def _for(self, item, /):
+        item = item._tokens if isinstance(item, LambdaExpr) else (item,)
+        return LambdaExpr('(', *self._tokens, ') for (', *item, ')')
+
+    def _in(self, item, /):
+        item = item._tokens if isinstance(item, LambdaExpr) else (item,)
+        return LambdaExpr(*self._tokens, ' in (', *item, ')')
 
 
-_registered_vars: Final[MutableSet[str]] = set()
+class _LambdaVarMeta(ChainedMeta):
+    __slots__ = ()
+
+    def __call__(cls, name: str):  # type: ignore
+        instance = _registered_vars.get(name, None)
+        if instance is not None:
+            return instance
+        if not name.isidentifier() or iskeyword(name):
+            raise NameError(f'LambdaVar with name `{name}` is not a valid identifier')
+        return super().__call__(name)
 
 
-class LambdaVar(LambdaExpr):
+class LambdaVar(LambdaExpr, metaclass=_LambdaVarMeta):
     """
-    >>> a = LambdaVar('a'); b = LambdaVar('b')
+    >>> a = LambdaVar('a')
+    >>> b = LambdaVar('b')
     >>> tuple(map(a - b, (10, 20, 30), (10, 20, 20)))
     (0, 0, 10)
     """
 
     __slots__ = ()
 
+    def __new__(cls, name: str) -> 'LambdaVar':
+        return super().__new__(cls)
+
     def __init__(self, name: str) -> None:
-
-        if name in _registered_vars:
-            raise NameError(f'Name `{name}` has been already created')
-        if not name.isidentifier() or iskeyword(name):
-            raise NameError(f'Name `{name}` is not a valid identifier')
-
-        _registered_vars.add(name)
         super().__init__(name)
+        self._string_repr = name
+        _registered_vars[name] = self
 
-    def __str__(self):
-        return self._tokens[0]
 
-
-class LambdaArgs(LambdaVar):
+class _StarredLambdaVarMeta(_LambdaVarMeta):
     __slots__ = ()
 
-    def __new__(cls):
-        if not hasattr(cls, 'instance'):
-            cls.instance = super(LambdaArgs, cls).__new__(cls)
-            cls.instance._tokens = ('*args',)
-            _registered_vars.add('*args')
-        return cls.instance
-
-    def __init__(self):
-        pass
+    def __call__(cls):
+        return cls.__new__(cls)
 
 
-class LambdaKwargs(LambdaVar):
+class _StarredLambdaVar(LambdaVar, metaclass=_StarredLambdaVarMeta):
+    """Special ``LambdaVar`` handler for ``*args`` and ``**kwargs``."""
     __slots__ = ()
 
-    def __new__(cls):
-        if not hasattr(cls, 'instance'):
-            cls.instance = super(LambdaKwargs, cls).__new__(cls)
-            cls.instance._tokens = ('**kwargs',)
-            _registered_vars.add('**kwargs')
-        return cls.instance
+    def __new__(cls, name: str):
+        instance = _registered_vars.get(name, None)
+        if instance is not None:
+            return instance
+        instance = LambdaExpr.__new__(cls)
+        instance._string_repr = name
+        _registered_vars[name] = instance
+        return instance
 
-    def __init__(self):
-        pass
+    def __call__(self, *args, **kwargs) -> NoReturn:
+        raise TypeError(
+            f'Cannot build a lambda function based only on the starred `LambdaVar` instance {repr(self)}'
+        )
+
+    def __iter__(self) -> Generator[str, None, None]:  # type: ignore
+        yield self.name  # type: ignore
+
+
+class LambdaArgs(_StarredLambdaVar):
+    __slots__ = ()
+
+    def __new__(cls) -> 'LambdaArgs':
+        return super().__new__(LambdaArgs, '*args')
+
+
+class LambdaKwargs(_StarredLambdaVar):
+    __slots__ = ()
+
+    def __new__(cls) -> 'LambdaKwargs':
+        return super().__new__(LambdaKwargs, '**kwargs')
+
+
+_registered_vars: Final[Dict[str, LambdaVar]] = {}
