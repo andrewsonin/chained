@@ -1,3 +1,4 @@
+from abc import ABCMeta, abstractmethod
 from functools import partial
 from keyword import iskeyword
 from typing import Tuple, Final, Callable, Any, List, Generator, NoReturn, Dict
@@ -190,11 +191,7 @@ class LambdaExpr(metaclass=ChainedMeta):
             argument list
         """
 
-        try:
-            arg_set = set(self._tokens) & _registered_vars.keys()
-        except TypeError:
-            print(self._tokens)
-            raise
+        arg_set = set(self._tokens) & _registered_vars.keys()
 
         starred_args = []
         if (args := '*args') in arg_set:
@@ -368,7 +365,7 @@ class LambdaExpr(metaclass=ChainedMeta):
     def __contains__(self, item) -> 'LambdaExpr':
         return LambdaExpr('(', item, ') in (', *self._tokens, ')')
 
-    # Keywords substitutes
+    # >>> Keyword substitutes
     def _if(self, cond, /) -> 'LambdaExpr':
         cond = cond._tokens if isinstance(cond, LambdaExpr) else (cond,)
         return LambdaExpr('(', *self._tokens, ') if (', *cond, ')')
@@ -417,7 +414,7 @@ class LambdaVar(LambdaExpr, metaclass=_LambdaVarMeta):
         _registered_vars[name] = self
 
 
-class _StarredLambdaVarMeta(_LambdaVarMeta):
+class _StarredLambdaVarMeta(_LambdaVarMeta, ABCMeta):
     __slots__ = ()
 
     def __call__(cls):
@@ -425,7 +422,7 @@ class _StarredLambdaVarMeta(_LambdaVarMeta):
 
 
 class _StarredLambdaVar(LambdaVar, metaclass=_StarredLambdaVarMeta):
-    """Special ``LambdaVar`` handler for ``*args`` and ``**kwargs``."""
+    """Special abstract ``LambdaVar`` handler for ``*args`` and ``**kwargs``."""
     __slots__ = ()
 
     def __new__(cls, name: str):
@@ -442,8 +439,9 @@ class _StarredLambdaVar(LambdaVar, metaclass=_StarredLambdaVarMeta):
             f'Cannot build a lambda function based only on the starred `LambdaVar` instance {repr(self)}'
         )
 
+    @abstractmethod
     def __iter__(self) -> Generator[str, None, None]:  # type: ignore
-        yield self.name  # type: ignore
+        pass
 
 
 class LambdaArgs(_StarredLambdaVar):
@@ -452,12 +450,18 @@ class LambdaArgs(_StarredLambdaVar):
     def __new__(cls) -> 'LambdaArgs':
         return super().__new__(LambdaArgs, '*args')
 
+    def __iter__(self) -> Generator[str, None, None]:  # type: ignore
+        yield 'args'
+
 
 class LambdaKwargs(_StarredLambdaVar):
     __slots__ = ()
 
     def __new__(cls) -> 'LambdaKwargs':
         return super().__new__(LambdaKwargs, '**kwargs')
+
+    def __iter__(self) -> Generator[str, None, None]:  # type: ignore
+        yield 'kwargs'
 
 
 _registered_vars: Final[Dict[str, LambdaVar]] = {}
