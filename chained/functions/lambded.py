@@ -1,4 +1,3 @@
-from abc import ABCMeta, abstractmethod
 from functools import partial
 from keyword import iskeyword
 from typing import Tuple, Final, Callable, Any, List, Generator, NoReturn, Dict
@@ -414,7 +413,7 @@ class LambdaVar(LambdaExpr, metaclass=_LambdaVarMeta):
         _registered_vars[name] = self
 
 
-class _StarredLambdaVarMeta(_LambdaVarMeta, ABCMeta):
+class _StarredLambdaVarMeta(_LambdaVarMeta):
     __slots__ = ()
 
     def __call__(cls):
@@ -439,7 +438,6 @@ class _StarredLambdaVar(LambdaVar, metaclass=_StarredLambdaVarMeta):
             f'Cannot build a lambda function based only on the starred `LambdaVar` instance {repr(self)}'
         )
 
-    @abstractmethod
     def __iter__(self) -> Generator[str, None, None]:  # type: ignore
         pass
 

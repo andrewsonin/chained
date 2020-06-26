@@ -3,7 +3,16 @@ Defines unit-tests for 'chained/__init__.py' that cannot be implemented inside d
 """
 from unittest import TestCase
 
-from chained import seq
+from chained import ChainIterable, seq
+
+
+class ChIterable(TestCase):
+    def test_init(self):
+        self.assertRaisesRegex(
+            TypeError,
+            'Cannot initialize an instance of `ChainIterable` ',
+            lambda: ChainIterable(3)
+        )
 
 
 class Seq(TestCase):

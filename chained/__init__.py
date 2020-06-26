@@ -16,6 +16,7 @@ from typing import (
     Iterator,
     Generator,
     Reversible,
+    Sequence,
 
     # Abstract generic types
     Generic,
@@ -29,7 +30,7 @@ from typing import (
 
 )
 
-from chained.functions import flat, filter_map, compose_map, compose_filter
+from chained.functions import flat, filter_map, compose_map, compose_filter, cleandoc_deco
 from chained.type_utils import *
 from chained.type_utils.meta import ChainedMeta
 from chained.type_utils.protocol import varArgCallable
@@ -88,10 +89,10 @@ class ChainIterable(Generic[T_co], metaclass=ChainedMeta):
 
         (Iterable[T] | *T) -> None
 
-        >>> ChainIterable(3, 4, 5)    # OK
+        >>> ChainIterable(3, 4, 5)
         ChainIterable of (3, 4, 5)
 
-        >>> ChainIterable((3, 4, 5))  # OK
+        >>> ChainIterable((3, 4, 5))
         ChainIterable of (3, 4, 5)
 
         Args:
@@ -744,11 +745,69 @@ class ChainIterable(Generic[T_co], metaclass=ChainedMeta):
             islice(self._core, *args)
         )
 
-    def starmap(self: 'ChainIterable[Iterable[M_co]]', func, /, *funcs) -> 'ChainIterator':
+    def starmap(self: 'ChainIterable[Iterable[M_co]]',
+                func: Callable,
+                /,
+                *funcs: Callable) -> 'ChainIterator':
+        """
+        Make an iterator that computes the function using arguments obtained from the iterable.
+        Used instead of ``map`` when argument parameters are already grouped in tuples from a single iterable
+        (the data has been “pre-zipped”).
+
+        The difference between ``map`` and ``starmap`` parallels the distinction between function(a,b) and function(*c).
+        Arguments (functions) of ``starmap`` are called sequentially in the the same order as they passed.
+
+        >>> seq(1, ..., 10).chunks(3).starmap(lambda x, y, z: x * (y - z)).collect(tuple)
+        ChainIterable of (-1, -4, -7)
+
+        Args:
+            func:    first function to map
+            *funcs:  remaining functions to map
+        Returns:
+            resulting iterator
+        """
         iterator = starmap(func, self._core)
         for func in funcs:
             iterator = starmap(func, iterator)
         return ChainIterator._make_with_no_checks(iterator)
+
+    def split(self,
+              n: int,
+              collector: Callable[[Iterable[T_co]], Sequence[T_co]] = tuple) -> 'ChainIterator[Sequence[T_co]]':
+        """
+        Splits the 'self' into 'n' equal pieces, if possible.
+        If not, the first few pieces will be 1 longer than the last few.
+
+        >>> seq(1, ..., 12).split(5).collect(tuple)
+        ChainIterable of ((1, 2, 3), (4, 5), (6, 7), (8, 9), (10, 11))
+
+        >>> seq(1, ..., 10).split(3).collect(tuple)
+        ChainIterable of ((1, 2, 3), (4, 5, 6), (7, 8, 9))
+
+        >>> split_1, split_2, split_3 = seq(1, ..., 12).split(3)
+
+        Args:
+            n:          number of pieces
+            collector:  split holder
+        Returns:
+            split iterator
+        """
+
+        core = collector(self._core)
+        split_size, remainder = divmod(len(core), n)
+        n_elements = [split_size] * n
+        for i in range(min(n, remainder)):
+            n_elements[i] += 1
+
+        def split_generator() -> Generator[Sequence[T_co], None, None]:
+            container = core
+            first = last = 0
+            for n in n_elements:
+                last += n
+                yield container[first:last]
+                first = last
+
+        return ChainIterator._make_with_no_checks(split_generator())
 
     def step_by(self, step: int) -> 'ChainIterator[T_co]':
         """
@@ -1214,6 +1273,7 @@ def seq(*args: int) -> ChainIterable[int]:
     pass
 
 
+@cleandoc_deco
 def seq(*args: Union[int, 'ellipsis'], last: Optional[int] = None) -> ChainIterable[int]:
     """
     Creates a sequence that can be one of the following seven types.
@@ -1253,11 +1313,14 @@ def seq(*args: Union[int, 'ellipsis'], last: Optional[int] = None) -> ChainItera
 
     arg_length = len(args)
     left_bound = args[0]
+
     if i == 1:
+
         if arg_length == 2:
             if last is None:
                 return ChainIterator._make_with_no_checks(count(left_bound))  # type: ignore
             return ChainRange(left_bound, last + 1)  # type: ignore
+
         if arg_length == 3:
             if last is not None:
                 raise ValueError(
@@ -1265,17 +1328,21 @@ def seq(*args: Union[int, 'ellipsis'], last: Optional[int] = None) -> ChainItera
                     'if positional arguments obey the following pattern: (start, ..., stop)'
                 )
             return ChainRange(left_bound, args[-1])  # type: ignore
+
         raise IndexError(
             'The number of positional arguments should not exceed 3 '
             'in the case when the Ellipsis is in the 1st index position. '
             '(start, ...), (start, ..., stop), (arg1, ..., last=last) signatures are only allowed'
         )
-    elif i == 2:
+
+    if i == 2:
+
         step = args[1] - left_bound  # type: ignore
         if arg_length == 3:
             if last is None:
                 return ChainIterator._make_with_no_checks(count(left_bound, step))  # type: ignore
             return ChainRange(left_bound, last + 1, step)  # type: ignore
+
         if arg_length == 4:
             if last is not None:
                 raise ValueError(
@@ -1283,18 +1350,16 @@ def seq(*args: Union[int, 'ellipsis'], last: Optional[int] = None) -> ChainItera
                     'if positional arguments obey the following pattern: (start, second, ..., stop)'
                 )
             return ChainRange(left_bound, args[-1], step)  # type: ignore
+
         raise IndexError(
             'The number of positional arguments should not exceed 4 '
             'in the case when the Ellipsis is in the 2st index position. (start, second, ...), '
             '(start, second, ..., stop), (arg1, second, ..., last=last) signatures are only allowed'
         )
+
     raise IndexError(
         'Ellipsis can be a placeholder only at the 1st or the 2nd index positions'
     )
-
-
-c = seq
-Range = ChainRange
 
 
 @overload
@@ -1314,3 +1379,7 @@ def make_chain(iterable: Iterable[T]) -> ChainIterable[T]:
             return ChainIterator._make_with_no_checks(iterable)  # type: ignore
         return ChainIterable._make_with_no_checks(iterable)
     raise TypeError('')
+
+
+c = seq
+Range = ChainRange
