@@ -1,6 +1,6 @@
 package:
   name: chained
-  version: 0.0.7
+  version: 0.0.8
 
 build:
   number: 1

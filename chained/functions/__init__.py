@@ -1,9 +1,34 @@
 from collections import abc
+from inspect import cleandoc
+from types import FunctionType
 from typing import Union, Type, Tuple, Iterable, Any, Callable, Generator
 
 from chained.type_utils.typevar import T, M
 
 
+def cleandoc_deco(func: T) -> T:
+    """
+    Cleans the function docstring.
+
+    >>> def fun(x):        \
+            '  DocString '
+    >>> fun = cleandoc_deco(fun)
+    >>> fun.__doc__
+    'DocString '
+
+    Args:
+        func:  function whose documentation needs to be cleaned
+    Returns:
+        resulting function
+    """
+    if type(func) is FunctionType:
+        doc_str = func.__doc__
+        if doc_str is not None:
+            func.__doc__ = cleandoc(doc_str)
+    return func
+
+
+@cleandoc_deco
 def filter_map(function: Callable[[T], M],
                iterable: Iterable[T],
                exceptions: Union[Type[BaseException], Tuple[Type[BaseException], ...]]) -> Generator[M, None, None]:
@@ -34,6 +59,7 @@ def filter_map(function: Callable[[T], M],
             pass
 
 
+@cleandoc_deco
 def flat(iterable: Iterable[Union[T, Iterable]]) -> Generator[T, None, None]:
     """
     Flattens an iterable with any levels of nesting, yielding its values into a generator.
@@ -54,6 +80,7 @@ def flat(iterable: Iterable[Union[T, Iterable]]) -> Generator[T, None, None]:
             yield item  # type: ignore
 
 
+@cleandoc_deco
 def compose_map(iterable: Iterable, *predicates: Callable[[Any], T]) -> Generator[T, None, None]:
     """
     A composite analogue of the built-in function 'map' that allows the user to specify multiple mapping functions.
@@ -83,6 +110,7 @@ def compose_map(iterable: Iterable, *predicates: Callable[[Any], T]) -> Generato
         yield item
 
 
+@cleandoc_deco
 def compose_filter(iterable: Iterable[T], *predicates: Callable[[Any], bool]) -> Generator[T, None, None]:
     """
     A composite analogue of the built-in function 'filter' that allows the user to specify multiple filter functions.
