@@ -1,5 +1,5 @@
 from collections import deque
-from itertools import islice, chain, zip_longest, starmap, count
+from itertools import islice, chain, zip_longest, repeat, starmap, count
 from types import GeneratorType, TracebackType, CodeType, FrameType
 from typing import (
 
@@ -785,6 +785,8 @@ class ChainIterable(Generic[T_co], metaclass=ChainedMeta):
         ChainIterable of ((1, 2, 3), (4, 5, 6), (7, 8, 9))
 
         >>> split_1, split_2, split_3 = seq(1, ..., 12).split(3)
+        >>> split_1
+        (1, 2, 3, 4)
 
         Args:
             n:          number of pieces
@@ -793,17 +795,17 @@ class ChainIterable(Generic[T_co], metaclass=ChainedMeta):
             split iterator
         """
 
-        core = collector(self._core)
-        split_size, remainder = divmod(len(core), n)
-        n_elements = [split_size] * n
-        for i in range(min(n, remainder)):
-            n_elements[i] += 1
-
         def split_generator() -> Generator[Sequence[T_co], None, None]:
-            container = core
+            container = collector(self._core)
+            split_size, remainder = divmod(len(container), n)
+            split_size_p1 = split_size + 1
             first = last = 0
-            for n in n_elements:
-                last += n
+            for _ in repeat(None, remainder):
+                last += split_size_p1
+                yield container[first:last]
+                first = last
+            for _ in repeat(None, n - remainder):
+                last += split_size
                 yield container[first:last]
                 first = last
 
